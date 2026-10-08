@@ -19,6 +19,7 @@ import { useTheme } from '../../../theme';
 import { useAuth } from '../../auth';
 import { OrderCard } from '../../orders/components/OrderCard';
 import { Order } from '../../orders/types';
+import { DeliveryApiService } from '../../delivery/services/deliveryApiService';
 import { HomeActions } from '../services/HomeActions';
 
 interface HomeScreenProps {
@@ -55,7 +56,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   const [refreshing, setRefreshing] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
 
-  const [isCheckedIn, setIsCheckedIn] = useState(false);
+  // Fully online application: delivery partner defaults to Online
+  const [isCheckedIn, setIsCheckedIn] = useState(true);
   const [unassignedOrders, setUnassignedOrders] = useState<Order[]>([]);
   const [activeDeliveries, setActiveDeliveries] = useState<Order[]>([]);
   const [pendingCashTotal, setPendingCashTotal] = useState<number>(0);
@@ -66,9 +68,11 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
     else setLoading(true);
 
     try {
-      // Check stored shift state
+      // Check stored shift state: default to ONLINE (true) for fully online app
       const storedShift = await storage.getString(SHIFT_STORAGE_KEY);
-      if (storedShift === 'true') {
+      if (storedShift === 'false') {
+        setIsCheckedIn(false);
+      } else {
         setIsCheckedIn(true);
       }
 
@@ -83,9 +87,17 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
       setActiveDeliveries(active);
 
       if (attendance) {
-        if (attendance.isCheckedIn !== undefined) {
-          setIsCheckedIn(Boolean(attendance.isCheckedIn));
-          await storage.set(SHIFT_STORAGE_KEY, String(Boolean(attendance.isCheckedIn)));
+        const rawAtt: any = attendance;
+        if (rawAtt.isCheckedIn !== undefined) {
+          setIsCheckedIn(Boolean(rawAtt.isCheckedIn));
+          await storage.set(SHIFT_STORAGE_KEY, String(Boolean(rawAtt.isCheckedIn)));
+        } else if (rawAtt.is_checked_in !== undefined) {
+          setIsCheckedIn(Boolean(rawAtt.is_checked_in));
+          await storage.set(SHIFT_STORAGE_KEY, String(Boolean(rawAtt.is_checked_in)));
+        } else if (rawAtt.attendance_state) {
+          const isAttOnline = rawAtt.attendance_state === 'checked_in';
+          setIsCheckedIn(isAttOnline);
+          await storage.set(SHIFT_STORAGE_KEY, String(isAttOnline));
         }
         if (attendance.todayWorkedHours) {
           setWorkedHours(attendance.todayWorkedHours);
@@ -154,11 +166,56 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
     const pickingId = order.pickingId || Number(order.id);
     setActionLoading(true);
     try {
-      await HomeActions.getMyActiveDeliveries(driverUserId); // refresh
-      onNavigateToOrderDetails(order);
+      await DeliveryApiService.acceptOrder(pickingId, driverUserId);
+      showStatusModal({
+        type: 'success',
+        title: 'Order Accepted! 🚀',
+        message: `Picking #${order.orderNumber.replace(/^#+/, '')} is now assigned to you. Proceeding to order workflow.`,
+        buttonText: 'View Details',
+        onConfirm: () => onNavigateToOrderDetails({ ...order, status: 'assigned' }),
+      });
+      await loadDashboardData(true);
+    } catch (err: any) {
+      showStatusModal({
+        type: 'error',
+        title: 'Accept Failed',
+        message: err?.message || 'Unable to accept this order picking.',
+      });
     } finally {
       setActionLoading(false);
     }
+  };
+
+  const handleRejectOrder = (order: Order) => {
+    const pickingId = order.pickingId || Number(order.id);
+    showStatusModal({
+      type: 'confirm',
+      title: 'Reject Order Picking',
+      message: `Decline picking #${order.orderNumber.replace(/^#+/, '')}? This order will return to the hub dispatch.`,
+      confirmText: 'Reject Order',
+      cancelText: 'Cancel',
+      isDestructive: true,
+      onConfirm: async () => {
+        setActionLoading(true);
+        try {
+          await DeliveryApiService.rejectOrder(pickingId, driverUserId);
+          showStatusModal({
+            type: 'info',
+            title: 'Order Declined',
+            message: 'Picking was declined and returned to dispatch queue.',
+          });
+          loadDashboardData(true);
+        } catch (err: any) {
+          showStatusModal({
+            type: 'error',
+            title: 'Action Failed',
+            message: err?.message || 'Failed to reject picking.',
+          });
+        } finally {
+          setActionLoading(false);
+        }
+      },
+    });
   };
 
   return (
@@ -182,31 +239,6 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         </View>
 
         <View style={styles.headerRightGroup}>
-          <View
-            style={[
-              styles.onlineStatusBadge,
-              {
-                backgroundColor: isCheckedIn ? '#DCFCE7' : '#F3F4F6',
-                borderColor: isCheckedIn ? '#86EFAC' : '#D1D5DB',
-              },
-            ]}
-          >
-            <View
-              style={[
-                styles.onlineDot,
-                { backgroundColor: isCheckedIn ? '#16A34A' : '#9CA3AF' },
-              ]}
-            />
-            <Text
-              style={[
-                styles.onlineStatusText,
-                { color: isCheckedIn ? '#16A34A' : '#6B7280' },
-              ]}
-            >
-              {isCheckedIn ? 'ONLINE' : 'OFFLINE'}
-            </Text>
-          </View>
-
           <TouchableOpacity
             style={[styles.profileAvatarBtn, { backgroundColor: colors.surfaceVariant, borderColor: colors.border }]}
             onPress={onNavigateToProfile}
@@ -245,15 +277,26 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           ]}
         >
           <View style={styles.shiftBannerContent}>
-            <View>
-              <Text style={[styles.driverGreeting, { color: colors.textSecondary }]}>
+            <View style={{ flex: 1, marginRight: 12 }}>
+              <Text style={[styles.driverGreeting, { color: colors.textSecondary }]} numberOfLines={1}>
                 Hello, {user?.name || 'Delivery Partner'} 👋
               </Text>
-              <Text style={[styles.shiftStatusLarge, { color: colors.textPrimary }]}>
-                {isCheckedIn ? 'You are On Duty' : 'You are Off Duty'}
-              </Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 3 }}>
+                <View
+                  style={{
+                    width: 8,
+                    height: 8,
+                    borderRadius: 4,
+                    backgroundColor: isCheckedIn ? '#16A34A' : '#9CA3AF',
+                    marginRight: 6,
+                  }}
+                />
+                <Text style={[styles.shiftStatusLarge, { color: isCheckedIn ? '#15803D' : colors.textPrimary }]}>
+                  {isCheckedIn ? 'Online & On Duty' : 'You are Off Duty'}
+                </Text>
+              </View>
               <Text style={[styles.shiftHoursText, { color: colors.textSecondary }]}>
-                Worked today: <Text style={{ fontWeight: '700', color: colors.textPrimary }}>{workedHours ? `${workedHours} hrs` : isCheckedIn ? 'Active' : '0 hrs'}</Text>
+                Worked today: <Text style={{ fontWeight: '700', color: colors.textPrimary }}>{workedHours ? `${workedHours} hrs` : isCheckedIn ? 'Active shift' : '0 hrs'}</Text>
               </Text>
             </View>
 
@@ -261,7 +304,9 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
               style={[
                 styles.shiftToggleBtn,
                 {
-                  backgroundColor: isCheckedIn ? '#DC2626' : colors.primary,
+                  backgroundColor: isCheckedIn ? '#FEF2F2' : colors.primary,
+                  borderColor: isCheckedIn ? '#FECACA' : 'transparent',
+                  borderWidth: isCheckedIn ? 1 : 0,
                 },
               ]}
               onPress={handleToggleCheckIn}
@@ -269,11 +314,18 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
               activeOpacity={0.8}
             >
               {actionLoading ? (
-                <ActivityIndicator color="#FFFFFF" size="small" />
+                <ActivityIndicator color={isCheckedIn ? '#DC2626' : '#FFFFFF'} size="small" />
               ) : (
-                <Text style={styles.shiftToggleBtnText}>
-                  {isCheckedIn ? 'Check Out' : 'Check In'}
-                </Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+                  <Ionicons
+                    name={isCheckedIn ? 'stop-circle-outline' : 'play-circle-outline'}
+                    size={15}
+                    color={isCheckedIn ? '#DC2626' : '#FFFFFF'}
+                  />
+                  <Text style={[styles.shiftToggleBtnText, { color: isCheckedIn ? '#DC2626' : '#FFFFFF' }]}>
+                    {isCheckedIn ? 'End Shift' : 'Start Shift'}
+                  </Text>
+                </View>
               )}
             </TouchableOpacity>
           </View>
@@ -422,7 +474,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                 order={order}
                 onTrackOrder={onNavigateToOrderDetails}
                 onAccept={handleAcceptOrder}
-                onReject={() => {}}
+                onReject={handleRejectOrder}
               />
             ))
           )}
@@ -443,6 +495,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingBottom: 12,
     borderBottomWidth: 1,
+    zIndex: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 3,
   },
   brandGroup: {
     flexDirection: 'row',
@@ -497,7 +555,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   scrollContent: {
-    paddingVertical: 14,
+    paddingTop: 14,
     gap: 16,
   },
   shiftBanner: {
@@ -528,9 +586,12 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   shiftToggleBtn: {
-    paddingHorizontal: 18,
+    paddingHorizontal: 14,
     paddingVertical: 10,
     borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 110,
   },
   shiftToggleBtnText: {
     color: '#FFFFFF',

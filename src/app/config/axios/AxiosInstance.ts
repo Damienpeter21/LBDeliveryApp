@@ -28,6 +28,7 @@ export const AUTH_STORAGE_KEYS = {
   USER_DATA: '@lb_delivery_user_data',
   USER_ACTIVE: 'useractive',
   SHIFT_CHECKED_IN: '@lb_delivery_shift_checked_in',
+  SESSION_COOKIE: '@lb_delivery_session_cookie',
 };
 
 
@@ -41,13 +42,21 @@ export const getStoredRefreshToken = async (): Promise<string | null> => {
   return await storage.getString(AUTH_STORAGE_KEYS.REFRESH_TOKEN);
 };
 
+export const getStoredSessionCookie = async (): Promise<string | null> => {
+  return await storage.getString(AUTH_STORAGE_KEYS.SESSION_COOKIE);
+};
+
 export const setStoredAuthTokens = async (tokens: {
   accessToken: string;
   refreshToken?: string;
+  sessionCookie?: string;
 }): Promise<void> => {
   await storage.set(AUTH_STORAGE_KEYS.ACCESS_TOKEN, tokens.accessToken);
   if (tokens.refreshToken) {
     await storage.set(AUTH_STORAGE_KEYS.REFRESH_TOKEN, tokens.refreshToken);
+  }
+  if (tokens.sessionCookie) {
+    await storage.set(AUTH_STORAGE_KEYS.SESSION_COOKIE, tokens.sessionCookie);
   }
 };
 
@@ -55,6 +64,7 @@ export const clearStoredAuthTokens = async (): Promise<void> => {
   await storage.delete(AUTH_STORAGE_KEYS.ACCESS_TOKEN);
   await storage.delete(AUTH_STORAGE_KEYS.REFRESH_TOKEN);
   await storage.delete(AUTH_STORAGE_KEYS.USER_DATA);
+  await storage.delete(AUTH_STORAGE_KEYS.SESSION_COOKIE);
   await storage.set(AUTH_STORAGE_KEYS.USER_ACTIVE, false);
 };
 
@@ -227,6 +237,19 @@ axiosInstance.interceptors.request.use(
         config.headers = new AxiosHeaders();
       }
 
+      // Bypass ngrok warning page if ngrok is used
+      config.headers['ngrok-skip-browser-warning'] = '69420';
+
+      // Attach Odoo session cookie and X-Openerp-Session-Id if present
+      const sessionCookie = await getStoredSessionCookie();
+      if (sessionCookie) {
+        config.headers.Cookie = sessionCookie;
+        const sessionIdMatch = sessionCookie.match(/session_id=([^;]+)/);
+        if (sessionIdMatch) {
+          config.headers['X-Openerp-Session-Id'] = sessionIdMatch[1];
+        }
+      }
+
       // 3. Attach Bearer token if available and not skipped
       if (!config.skipAuth) {
         const accessToken = await getStoredAccessToken();
@@ -258,7 +281,20 @@ axiosInstance.interceptors.request.use(
 // ── Response Interceptor ────────────────────────────────────────────
 
 axiosInstance.interceptors.response.use(
-  (response: AxiosResponse) => response,
+  async (response: AxiosResponse) => {
+    // Extract and persist Odoo session cookie if returned by server
+    try {
+      const setCookie = response.headers?.['set-cookie'];
+      if (setCookie) {
+        const cookieStr = Array.isArray(setCookie) ? setCookie.join('; ') : String(setCookie);
+        const match = cookieStr.match(/session_id=([^;]+)/);
+        if (match) {
+          await storage.set(AUTH_STORAGE_KEYS.SESSION_COOKIE, `session_id=${match[1]}`);
+        }
+      }
+    } catch (_) {}
+    return response;
+  },
   async (error: AxiosError) => {
     const originalRequest = error.config as InternalAxiosRequestConfig & { _retry?: boolean };
 

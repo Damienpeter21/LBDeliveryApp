@@ -34,17 +34,52 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
 }) => {
   const insets = useSafeAreaInsets();
   const { colors, borderRadius } = useTheme();
+  const { login, loginWithGoogle, isLoading, error, clearError } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showGooglePicker, setShowGooglePicker] = useState(false);
-  const { login, loginWithGoogle, isLoading, error, clearError } = useAuth();
+  const [emailError, setEmailError] = useState<string | null>(null);
+  const [passwordError, setPasswordError] = useState<string | null>(null);
 
   const handleLogin = async () => {
-    if (!email || !password) return;
-    const success = await login({ email, password });
+    setEmailError(null);
+    setPasswordError(null);
+    clearError();
+
+    let hasValidationErrors = false;
+    const cleanEmail = email.trim();
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    if (!cleanEmail) {
+      setEmailError('Email address is required');
+      hasValidationErrors = true;
+    } else if (!emailRegex.test(cleanEmail)) {
+      setEmailError('Please enter a valid email address');
+      hasValidationErrors = true;
+    }
+
+    if (!password) {
+      setPasswordError('Password is required');
+      hasValidationErrors = true;
+    } else if (password.length < 4) {
+      setPasswordError('Password must be at least 4 characters');
+      hasValidationErrors = true;
+    }
+
+    if (hasValidationErrors) return;
+
+    const success = await login({ email: cleanEmail, password });
     if (success && onLoginSuccess) {
       onLoginSuccess();
     }
+  };
+
+  const handleDemoFill = () => {
+    setEmail('karthik.delivery@example.com');
+    setPassword('1234');
+    setEmailError(null);
+    setPasswordError(null);
+    clearError();
   };
 
   const handleGoogleSignInPress = () => {
@@ -135,30 +170,51 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
           ]}
         >
           <AuthInput
-            label="Email Address"
+            label="Email Address *"
             iconName="mail-outline"
-            placeholder="name@example.com"
+            placeholder="karthik.delivery@example.com"
             value={email}
             onChangeText={text => {
               setEmail(text);
+              if (emailError) setEmailError(null);
               if (error) clearError();
             }}
             autoCapitalize="none"
             keyboardType="email-address"
+            maxLength={80}
+            error={emailError || undefined}
           />
 
           <AuthInput
-            label="Password"
+            label="Password *"
             iconName="lock-closed-outline"
             placeholder="Enter your password"
             value={password}
             onChangeText={text => {
               setPassword(text);
+              if (passwordError) setPasswordError(null);
               if (error) clearError();
             }}
             secureTextEntry
+            maxLength={50}
+            error={passwordError || undefined}
             hasError={!!error}
           />
+
+          {/* Demo Login Quick Fill */}
+          <TouchableOpacity
+            style={[
+              styles.demoFillBtn,
+              { backgroundColor: colors.surfaceVariant, borderColor: colors.border },
+            ]}
+            onPress={handleDemoFill}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="flash" size={14} color={colors.primary} style={{ marginRight: 6 }} />
+            <Text style={[styles.demoFillText, { color: colors.primary }]}>
+              Quick Fill Demo Partner (karthik.delivery@example.com)
+            </Text>
+          </TouchableOpacity>
 
           {/* ── Login Error Banner ──────────────────────────────────────────
               Shown when the API returns an error (e.g. wrong credentials).
@@ -341,6 +397,21 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.05,
     shadowRadius: 10,
     elevation: 3,
+  },
+  demoFillBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    marginTop: 4,
+    marginBottom: 14,
+  },
+  demoFillText: {
+    fontSize: 12,
+    fontWeight: '700',
   },
   forgotPassBtn: {
     alignSelf: 'flex-end',

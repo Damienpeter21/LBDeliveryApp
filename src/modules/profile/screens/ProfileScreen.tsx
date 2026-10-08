@@ -21,6 +21,7 @@ import { useOrders } from '../../orders';
 import { useWishlist } from '../../products/context/WishlistContext';
 import { useAddress } from '../context/AddressContext';
 import { CustomerService } from '../services/customerService';
+import { DeliveryApiService } from '../../delivery/services/deliveryApiService';
 
 interface ProfileScreenProps {
   onBack: () => void;
@@ -67,35 +68,53 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
     let isMounted = true;
     if (!isAuthenticated || !user?.id) return;
 
-    CustomerService.getUserProfile(user.id)
-      .then(res => {
-        const profile = Array.isArray(res?.result)
-          ? res.result[0]
-          : Array.isArray(res)
-          ? res[0]
-          : res?.result;
-
+    const uId = Number(user.userId || user.id || 15);
+    DeliveryApiService.getProfile(uId)
+      .then(profile => {
         if (isMounted && profile) {
-          const pId = Array.isArray(profile.partner_id)
-            ? profile.partner_id[0]
-            : profile.partner_id || undefined;
-
           updateUser({
             ...(profile.name ? { name: profile.name } : {}),
             ...(profile.phone ? { phone: String(profile.phone) } : {}),
             ...(profile.email ? { email: profile.email } : {}),
-            ...(pId ? { partnerId: pId } : {}),
+            vehicle_type: profile.vehicle_type || user.vehicle_type,
+            vehicle_number: profile.vehicle_number || user.vehicle_number,
+            license_number: profile.license_number || user.license_number,
+            city: profile.city || user.city,
           });
         }
       })
-      .catch(err => {
-        console.warn('Profile live sync warning:', err);
+      .catch(() => {
+        // Fallback to customer profile
+        CustomerService.getUserProfile(user.id)
+          .then(res => {
+            const profile = Array.isArray(res?.result)
+              ? res.result[0]
+              : Array.isArray(res)
+              ? res[0]
+              : res?.result;
+
+            if (isMounted && profile) {
+              const pId = Array.isArray(profile.partner_id)
+                ? profile.partner_id[0]
+                : profile.partner_id || undefined;
+
+              updateUser({
+                ...(profile.name ? { name: profile.name } : {}),
+                ...(profile.phone ? { phone: String(profile.phone) } : {}),
+                ...(profile.email ? { email: profile.email } : {}),
+                ...(pId ? { partnerId: pId } : {}),
+              });
+            }
+          })
+          .catch(err => {
+            console.warn('Profile live sync warning:', err);
+          });
       });
 
     return () => {
       isMounted = false;
     };
-  }, [isAuthenticated, user?.id]);
+  }, [isAuthenticated, user?.id, user?.userId]);
 
   const handleLogout = () => {
     showStatusModal({
@@ -239,7 +258,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
             activeOpacity={0.8}
           >
             <View style={[styles.statIconBox, { backgroundColor: colors.surfaceVariant }]}>
-              <Ionicons name="bag-handle" size={18} color={colors.primary} />
+              <Ionicons name="bicycle-outline" size={18} color={colors.primary} />
             </View>
             <View style={styles.statInfo}>
               {isAuthenticated && ordersLoading && orders.length === 0 ? (
@@ -249,7 +268,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                   {isAuthenticated ? orders.length : 0}
                 </Text>
               )}
-              <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Orders</Text>
+              <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Deliveries</Text>
             </View>
           </TouchableOpacity>
 
@@ -265,14 +284,14 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
             onPress={onNavigateToWishlist}
             activeOpacity={0.8}
           >
-            <View style={[styles.statIconBox, { backgroundColor: colors.surfaceVariant }]}>
-              <Ionicons name="heart" size={18} color={colors.error} />
+            <View style={[styles.statIconBox, { backgroundColor: '#FEF3C7' }]}>
+              <Ionicons name="cash-outline" size={18} color="#D97706" />
             </View>
             <View style={styles.statInfo}>
-              <Text style={[styles.statValue, { color: colors.textPrimary }]}>
-                {wishlistCount}
+              <Text style={[styles.statValue, { color: '#D97706' }]}>
+                COD
               </Text>
-              <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Wishlist</Text>
+              <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Cash Handover</Text>
             </View>
           </TouchableOpacity>
 
@@ -285,20 +304,67 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                 borderRadius: borderRadius.lg,
               },
             ]}
-            onPress={() => (isAuthenticated ? onNavigateToSavedAddresses() : onNavigateToLogin())}
+            onPress={onNavigateToOrders}
             activeOpacity={0.8}
           >
-            <View style={[styles.statIconBox, { backgroundColor: colors.surfaceVariant }]}>
-              <Ionicons name="location" size={18} color={colors.primary} />
+            <View style={[styles.statIconBox, { backgroundColor: '#DCFCE7' }]}>
+              <Ionicons name="time-outline" size={18} color="#16A34A" />
             </View>
             <View style={styles.statInfo}>
-              <Text style={[styles.statValue, { color: colors.textPrimary }]}>
-                {isAuthenticated ? addresses.length : 0}
+              <Text style={[styles.statValue, { color: '#16A34A' }]}>
+                Shift
               </Text>
-              <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Addresses</Text>
+              <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Attendance</Text>
             </View>
           </TouchableOpacity>
         </View>
+
+        {/* Driver Fleet Details Card */}
+        {isAuthenticated && (
+          <View
+            style={[
+              styles.vehicleInfoCard,
+              {
+                backgroundColor: colors.card,
+                borderColor: colors.border,
+                borderRadius: borderRadius.lg,
+              },
+            ]}
+          >
+            <View style={styles.vehicleHeaderRow}>
+              <Ionicons name="shield-checkmark" size={16} color={colors.primary} />
+              <Text style={[styles.vehicleHeaderTitle, { color: colors.textPrimary }]}>
+                Verified Fleet Partner
+              </Text>
+              <View style={[styles.activePill, { backgroundColor: '#DCFCE7' }]}>
+                <Text style={styles.activePillText}>ACTIVE</Text>
+              </View>
+            </View>
+
+            <View style={styles.vehicleGrid}>
+              <View style={styles.vehicleGridItem}>
+                <Text style={[styles.vehicleGridLabel, { color: colors.textSecondary }]}>VEHICLE</Text>
+                <Text style={[styles.vehicleGridVal, { color: colors.textPrimary }]}>
+                  {user?.vehicle_type || 'Scooty'} ({user?.vehicle_number || 'TN70CC7890'})
+                </Text>
+              </View>
+
+              <View style={styles.vehicleGridItem}>
+                <Text style={[styles.vehicleGridLabel, { color: colors.textSecondary }]}>LICENSE #</Text>
+                <Text style={[styles.vehicleGridVal, { color: colors.textPrimary }]}>
+                  {user?.license_number || 'TN7020230007890'}
+                </Text>
+              </View>
+
+              <View style={styles.vehicleGridItem}>
+                <Text style={[styles.vehicleGridLabel, { color: colors.textSecondary }]}>DELIVERY HUB</Text>
+                <Text style={[styles.vehicleGridVal, { color: colors.textPrimary }]}>
+                  {user?.city || 'Hosur, Tamil Nadu'}
+                </Text>
+              </View>
+            </View>
+          </View>
+        )}
 
         {/* Section 1: Account Activities */}
         <Text style={[styles.groupHeader, { color: colors.textSecondary }]}>ACCOUNT & ACTIVITY</Text>
@@ -739,5 +805,58 @@ const styles = StyleSheet.create({
   editBadgeText: {
     fontSize: 11,
     fontWeight: '800',
+  },
+  vehicleInfoCard: {
+    padding: 14,
+    borderWidth: 1,
+    marginBottom: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  vehicleHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  vehicleHeaderTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    marginLeft: 6,
+    flex: 1,
+    letterSpacing: 0.2,
+  },
+  activePill: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 10,
+  },
+  activePillText: {
+    fontSize: 10,
+    fontWeight: '900',
+    color: '#16A34A',
+    letterSpacing: 0.5,
+  },
+  vehicleGrid: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#f0f0f0',
+  },
+  vehicleGridItem: {
+    flex: 1,
+  },
+  vehicleGridLabel: {
+    fontSize: 9.5,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+    marginBottom: 2,
+  },
+  vehicleGridVal: {
+    fontSize: 11.5,
+    fontWeight: '700',
   },
 });

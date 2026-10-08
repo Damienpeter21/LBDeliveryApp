@@ -8,6 +8,7 @@ import { API_SETTINGS } from '../../../app/config';
 export const mapOdooStateToOrderStatus = (
   state?: any,
   deliveryStatus?: any,
+  driverId?: any,
 ): OrderStatus => {
   const normalizedState = typeof state === 'string' ? state.toLowerCase() : '';
   const normalizedDelivery =
@@ -33,21 +34,24 @@ export const mapOdooStateToOrderStatus = (
     return 'arrived_store';
   }
 
-  if (normalizedDelivery === 'assigned' || normalizedDelivery === 'accepted') {
+  if (driverId && (normalizedDelivery === 'assigned' || normalizedDelivery === 'accepted')) {
     return 'assigned';
   }
 
-  if (normalizedDelivery === 'unassigned' || normalizedState === 'draft' || normalizedState === 'waiting') {
+  if (!driverId || normalizedDelivery === 'unassigned' || normalizedState === 'draft' || normalizedState === 'waiting' || normalizedState === 'assigned') {
     return 'unassigned';
   }
 
-  return 'confirmed';
+  return 'assigned';
 };
 
-/**
- * Maps a Delivery Partner Picking (from /api/delivery/pickings/...) to the standard `Order` model.
- */
-export const mapDeliveryPickingToOrder = (raw: any): Order => {
+export const mapDeliveryPickingToOrder = (
+  raw: any,
+  defaultStatus?: OrderStatus | any,
+): Order => {
+  const resolvedDefaultStatus: OrderStatus | undefined =
+    typeof defaultStatus === 'string' ? (defaultStatus as OrderStatus) : undefined;
+
   if (!raw) {
     return {
       id: '0',
@@ -55,7 +59,7 @@ export const mapDeliveryPickingToOrder = (raw: any): Order => {
       orderNumber: '#WH/OUT/0000',
       date: 'Today',
       time: '12:00 PM',
-      status: 'unassigned',
+      status: resolvedDefaultStatus || 'unassigned',
       items: [],
       itemCount: 0,
       totalAmount: 0,
@@ -87,14 +91,36 @@ export const mapDeliveryPickingToOrder = (raw: any): Order => {
         const ampm = hours >= 12 ? 'PM' : 'AM';
         hours = hours % 12 || 12;
         const minutesStr = minutes < 10 ? `0${minutes}` : `${minutes}`;
-        date = `${day}/${month}/${year}`;
+
+        const now = new Date();
+        const isToday =
+          now.getDate() === parsed.getDate() &&
+          now.getMonth() === parsed.getMonth() &&
+          now.getFullYear() === parsed.getFullYear();
+        const isYesterday =
+          now.getDate() - 1 === parsed.getDate() &&
+          now.getMonth() === parsed.getMonth() &&
+          now.getFullYear() === parsed.getFullYear();
+
+        if (isToday) {
+          date = 'Today';
+        } else if (isYesterday) {
+          date = 'Yesterday';
+        } else {
+          date = `${day}/${month}/${year}`;
+        }
         time = `${hours}:${minutesStr} ${ampm}`;
       }
     } catch (_) {}
   }
 
   // Determine stage / status
-  const status = mapOdooStateToOrderStatus(raw.state, raw.delivery_state || raw.delivery_status || raw.stage);
+  const driverId = raw.driver_user_id || raw.driver_id;
+  const status = resolvedDefaultStatus || mapOdooStateToOrderStatus(
+    raw.state,
+    raw.delivery_state || raw.delivery_status || raw.stage,
+    driverId,
+  );
 
   // Parse items
   const rawItems = Array.isArray(raw.items)
@@ -107,7 +133,13 @@ export const mapDeliveryPickingToOrder = (raw: any): Order => {
 
   const items: OrderItem[] = rawItems.map((it: any, index: number) => {
     const pName = it.product_name || (Array.isArray(it.product_id) ? it.product_id[1] : it.name) || `Item #${index + 1}`;
-    const qty = Number(it.quantity || it.product_uom_qty || it.qty_done || 1);
+    const qty = Number(
+      it.quantity ||
+      it.product_uic_qty ||
+      it.product_uom_qty ||
+      it.qty_done ||
+      1,
+    );
     const price = Number(it.price_unit || it.price || 0);
 
     return {
@@ -119,7 +151,7 @@ export const mapDeliveryPickingToOrder = (raw: any): Order => {
         id: it.product_id ? (Array.isArray(it.product_id) ? it.product_id[0] : it.product_id) : index,
         name: pName,
         price,
-        unit: it.unit || 'unit',
+        unit: it.unit || it.uom || 'unit',
       },
     };
   });

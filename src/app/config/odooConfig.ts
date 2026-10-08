@@ -6,7 +6,8 @@ import axiosInstance from './axios/AxiosInstance';
  * Matches the official Postman collection for LB Delivery Partner
  */
 export const ODOO_CONFIG = {
-  DB: 'odoo18',
+  DB: 'home_delivery',
+  ALT_DB: 'odoo18',
   UID: 15,
   PASSWORD: '1234',
   LOGIN: 'karthik.delivery@example.com',

@@ -39,8 +39,21 @@ export const CashHandoverScreen: React.FC<CashHandoverScreenProps> = ({ onBack }
       const res = await DeliveryApiService.getPendingCashHandover(driverUserId);
       const data = res?.result !== undefined ? res.result : res;
       if (data) {
-        setTotalPendingCash(Number(data.total_pending_cash || 0));
-        const list = Array.isArray(data.orders) ? data.orders : [];
+        const list = Array.isArray(data.pending_handovers)
+          ? data.pending_handovers
+          : Array.isArray(data.orders)
+          ? data.orders
+          : [];
+        const total = Number(
+          data.total_pending_cash !== undefined
+            ? data.total_pending_cash
+            : list.reduce(
+                (acc: number, item: any) =>
+                  acc + Number(item.amount || item.amount_collected || item.amount_total || 0),
+                0,
+              ),
+        );
+        setTotalPendingCash(total);
         setOrders(list);
       }
     } catch (err) {

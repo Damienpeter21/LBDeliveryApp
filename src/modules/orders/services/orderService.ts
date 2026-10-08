@@ -9,6 +9,19 @@ import {
 import { Order } from '../types';
 import { mapDeliveryPickingToOrder } from '../utils/orderMapper';
 
+const extractPickingsArray = (res: any): any[] => {
+  if (!res) return [];
+  if (Array.isArray(res)) return res;
+  if (Array.isArray(res.pickings)) return res.pickings;
+  if (Array.isArray(res.deliveries)) return res.deliveries;
+  if (Array.isArray(res.cancelled_pickings)) return res.cancelled_pickings;
+  if (Array.isArray(res.result)) return res.result;
+  if (Array.isArray(res.result?.pickings)) return res.result.pickings;
+  if (Array.isArray(res.result?.deliveries)) return res.result.deliveries;
+  if (Array.isArray(res.result?.cancelled_pickings)) return res.result.cancelled_pickings;
+  return [];
+};
+
 export class OrderService {
   /**
    * Fetches unassigned new orders available for pickup.
@@ -17,14 +30,8 @@ export class OrderService {
   static async getUnassignedOrders(): Promise<Order[]> {
     try {
       const res = await DeliveryApiService.getUnassignedOrders();
-      const list = Array.isArray(res?.result)
-        ? res.result
-        : Array.isArray(res?.pickings)
-        ? res.pickings
-        : Array.isArray(res)
-        ? res
-        : [];
-      return list.map(mapDeliveryPickingToOrder);
+      const list = extractPickingsArray(res);
+      return list.map(item => mapDeliveryPickingToOrder(item, 'unassigned'));
     } catch (error) {
       console.warn('Error fetching unassigned orders:', error);
       return [];
@@ -41,13 +48,7 @@ export class OrderService {
   ): Promise<Order[]> {
     try {
       const res = await DeliveryApiService.getMyDeliveries(driverUserId, statusFilter);
-      const list = Array.isArray(res?.result)
-        ? res.result
-        : Array.isArray(res?.pickings)
-        ? res.pickings
-        : Array.isArray(res)
-        ? res
-        : [];
+      const list = extractPickingsArray(res);
       return list.map(mapDeliveryPickingToOrder);
     } catch (error) {
       console.warn('Error fetching my deliveries:', error);
@@ -65,13 +66,7 @@ export class OrderService {
   ): Promise<Order[]> {
     try {
       const res = await DeliveryApiService.getTodayDeliveries(driverUserId, statusFilter);
-      const list = Array.isArray(res?.result)
-        ? res.result
-        : Array.isArray(res?.pickings)
-        ? res.pickings
-        : Array.isArray(res)
-        ? res
-        : [];
+      const list = extractPickingsArray(res);
       return list.map(mapDeliveryPickingToOrder);
     } catch (error) {
       console.warn('Error fetching today deliveries:', error);
@@ -86,13 +81,7 @@ export class OrderService {
   static async getMyCancelledOrders(driverUserId: number): Promise<Order[]> {
     try {
       const res = await DeliveryApiService.getMyCancelledOrders(driverUserId);
-      const list = Array.isArray(res?.result)
-        ? res.result
-        : Array.isArray(res?.cancelled_pickings)
-        ? res.cancelled_pickings
-        : Array.isArray(res)
-        ? res
-        : [];
+      const list = extractPickingsArray(res);
       return list.map(mapDeliveryPickingToOrder);
     } catch (error) {
       console.warn('Error fetching cancelled orders:', error);
@@ -110,13 +99,7 @@ export class OrderService {
   ): Promise<Order[]> {
     try {
       const res = await DeliveryApiService.getMyTodayCancelledOrders(driverUserId, statusFilter);
-      const list = Array.isArray(res?.result)
-        ? res.result
-        : Array.isArray(res?.cancelled_pickings)
-        ? res.cancelled_pickings
-        : Array.isArray(res)
-        ? res
-        : [];
+      const list = extractPickingsArray(res);
       return list.map(mapDeliveryPickingToOrder);
     } catch (error) {
       console.warn('Error fetching today cancelled orders:', error);

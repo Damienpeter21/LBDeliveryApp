@@ -9,6 +9,19 @@ import {
 import { Order } from '../../orders/types';
 import { mapDeliveryPickingToOrder } from '../../orders/utils/orderMapper';
 
+const extractPickingsArray = (res: any): any[] => {
+  if (!res) return [];
+  if (Array.isArray(res)) return res;
+  if (Array.isArray(res.pickings)) return res.pickings;
+  if (Array.isArray(res.deliveries)) return res.deliveries;
+  if (Array.isArray(res.cancelled_pickings)) return res.cancelled_pickings;
+  if (Array.isArray(res.result)) return res.result;
+  if (Array.isArray(res.result?.pickings)) return res.result.pickings;
+  if (Array.isArray(res.result?.deliveries)) return res.result.deliveries;
+  if (Array.isArray(res.result?.cancelled_pickings)) return res.result.cancelled_pickings;
+  return [];
+};
+
 export class HomeActions {
   /**
    * Fetches live unassigned orders available for delivery pickup
@@ -17,14 +30,8 @@ export class HomeActions {
   static async getUnassignedOrders(): Promise<Order[]> {
     try {
       const res = await DeliveryApiService.getUnassignedOrders();
-      const list = Array.isArray(res?.result)
-        ? res.result
-        : Array.isArray(res?.pickings)
-        ? res.pickings
-        : Array.isArray(res)
-        ? res
-        : [];
-      return list.map(mapDeliveryPickingToOrder);
+      const list = extractPickingsArray(res);
+      return list.map(item => mapDeliveryPickingToOrder(item, 'unassigned'));
     } catch (error) {
       console.warn('HomeActions.getUnassignedOrders error:', error);
       return [];
@@ -38,13 +45,7 @@ export class HomeActions {
   static async getMyActiveDeliveries(driverUserId: number): Promise<Order[]> {
     try {
       const res = await DeliveryApiService.getMyDeliveries(driverUserId);
-      const list = Array.isArray(res?.result)
-        ? res.result
-        : Array.isArray(res?.pickings)
-        ? res.pickings
-        : Array.isArray(res)
-        ? res
-        : [];
+      const list = extractPickingsArray(res);
       const orders = list.map(mapDeliveryPickingToOrder);
       return orders.filter((o: Order) => o.status !== 'delivered' && o.status !== 'cancelled');
     } catch (error) {
@@ -95,7 +96,25 @@ export class HomeActions {
     try {
       const res = await DeliveryApiService.getPendingCashHandover(driverUserId);
       const data = res?.result !== undefined ? res.result : res;
-      return data || null;
+      if (!data) return null;
+
+      const handovers = Array.isArray(data.pending_handovers)
+        ? data.pending_handovers
+        : Array.isArray(data.orders)
+        ? data.orders
+        : [];
+
+      const total = Number(
+        data.total_pending_cash !== undefined
+          ? data.total_pending_cash
+          : handovers.reduce((acc: number, item: any) => acc + Number(item.amount || 0), 0),
+      );
+
+      return {
+        ...data,
+        total_pending_cash: total,
+        orders: handovers,
+      };
     } catch (error) {
       console.warn('HomeActions.getPendingCashHandover error:', error);
       return null;

@@ -31,12 +31,25 @@ export const ForgotPasswordScreen: React.FC<ForgotPasswordScreenProps> = ({
   const { colors, borderRadius } = useTheme();
 
   const [email, setEmail] = useState('');
+  const [emailError, setEmailError] = useState<string | null>(null);
   const [isSubmitted, setIsSubmitted] = useState(false);
   const { forgotPassword, isLoading, error } = useAuth();
 
   const handleResetPassword = async () => {
-    if (!email) return;
-    const success = await forgotPassword(email);
+    setEmailError(null);
+    const cleanEmail = email.trim();
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    if (!cleanEmail) {
+      setEmailError('Email address is required');
+      return;
+    }
+    if (!emailRegex.test(cleanEmail)) {
+      setEmailError('Please enter a valid email address');
+      return;
+    }
+
+    const success = await forgotPassword(cleanEmail);
     if (success) {
       setIsSubmitted(true);
       if (onResetSuccess) {
@@ -129,20 +142,24 @@ export const ForgotPasswordScreen: React.FC<ForgotPasswordScreenProps> = ({
             ]}
           >
             <AuthInput
-              label="Email Address"
+              label="Email Address *"
               iconName="mail-outline"
               placeholder="name@example.com"
               value={email}
-              onChangeText={setEmail}
+              onChangeText={text => {
+                setEmail(text);
+                if (emailError) setEmailError(null);
+              }}
               autoCapitalize="none"
               keyboardType="email-address"
-              error={error || undefined}
+              maxLength={80}
+              error={emailError || error || undefined}
             />
 
             <AuthButton
               title="Send Reset Link"
               loading={isLoading}
-              disabled={!email}
+              disabled={!email.trim()}
               onPress={handleResetPassword}
             />
 

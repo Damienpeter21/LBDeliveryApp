@@ -31,8 +31,12 @@ export const EditProfileScreen: React.FC<EditProfileScreenProps> = ({ onBack }) 
   const [name, setName] = useState(user?.name || '');
   const [phone, setPhone] = useState(user?.phone || '');
   const [email, setEmail] = useState(user?.email || '');
+  const [vehicleType, setVehicleType] = useState(user?.vehicle_type || 'Scooty');
+  const [vehicleNumber, setVehicleNumber] = useState(user?.vehicle_number || '');
+  const [licenseNumber, setLicenseNumber] = useState(user?.license_number || '');
   const [loading, setLoading] = useState(false);
   const [fetching, setFetching] = useState(false);
+  const [errors, setErrors] = useState<Record<string, string>>({});
 
   // Fetch latest profile from Odoo on mount
   useEffect(() => {
@@ -40,40 +44,82 @@ export const EditProfileScreen: React.FC<EditProfileScreenProps> = ({ onBack }) 
     if (!user?.id) return;
 
     setFetching(true);
-    CustomerService.getUserProfile(user.id)
-      .then(res => {
-        const profile = Array.isArray(res?.result) ? res.result[0] : res?.result;
-        if (isMounted && profile) {
-          if (profile.name) setName(profile.name);
-          if (profile.phone) setPhone(profile.phone);
-          if (profile.email) setEmail(profile.email);
-        }
-      })
-      .catch(err => {
-        console.warn('Failed to load profile from Odoo:', err);
-      })
-      .finally(() => {
-        if (isMounted) setFetching(false);
-      });
+    const uId = Number(user.userId || user.id || 15);
+
+    // Try Delivery Partner Profile API first
+    import('../../delivery/services/deliveryApiService').then(({ DeliveryApiService }) => {
+      DeliveryApiService.getProfile(uId)
+        .then(profile => {
+          if (isMounted && profile) {
+            if (profile.name) setName(profile.name);
+            if (profile.phone) setPhone(String(profile.phone));
+            if (profile.email) setEmail(profile.email);
+            if (profile.vehicle_type) setVehicleType(profile.vehicle_type);
+            if (profile.vehicle_number) setVehicleNumber(profile.vehicle_number);
+            if (profile.license_number) setLicenseNumber(profile.license_number);
+          }
+        })
+        .catch(() => {
+          // Fallback to customer profile
+          CustomerService.getUserProfile(user.id)
+            .then(res => {
+              const profile = Array.isArray(res?.result) ? res.result[0] : res?.result;
+              if (isMounted && profile) {
+                if (profile.name) setName(profile.name);
+                if (profile.phone) setPhone(profile.phone);
+                if (profile.email) setEmail(profile.email);
+              }
+            })
+            .catch(err => {
+              console.warn('Failed to load profile from Odoo:', err);
+            });
+        })
+        .finally(() => {
+          if (isMounted) setFetching(false);
+        });
+    });
 
     return () => {
       isMounted = false;
     };
-  }, [user?.id]);
+  }, [user?.id, user?.userId]);
+
+  const validate = (): boolean => {
+    const newErrors: Record<string, string> = {};
+    if (!name.trim()) {
+      newErrors.name = 'Full name is required';
+    } else if (name.trim().length < 2) {
+      newErrors.name = 'Name must be at least 2 characters';
+    }
+
+    const cleanPhone = phone.trim().replace(/\s+/g, '');
+    if (!cleanPhone) {
+      newErrors.phone = 'Phone number is required';
+    } else if (!/^[+]?[0-9]{10,13}$/.test(cleanPhone)) {
+      newErrors.phone = 'Enter valid phone number (10-13 digits)';
+    }
+
+    if (vehicleNumber.trim() && vehicleNumber.trim().length < 4) {
+      newErrors.vehicleNumber = 'Enter valid vehicle registration number';
+    }
+
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
 
   const handleSave = async () => {
-    if (!name.trim()) {
+    if (!validate()) {
       showStatusModal({
         type: 'warning',
-        title: 'Required',
-        message: 'Please enter your full name.',
+        title: 'Validation Error',
+        message: 'Please resolve input errors before saving.',
       });
       return;
     }
 
     setLoading(true);
     try {
-      // 1. Update res.users profile (Postman: "PUT My Profile")
+      // 1. Update res.users profile
       if (user?.id) {
         await CustomerService.updateUserProfile(user.id, {
           name: name.trim(),
@@ -81,7 +127,7 @@ export const EditProfileScreen: React.FC<EditProfileScreenProps> = ({ onBack }) 
         });
       }
 
-      // 2. Update res.partner details (Postman: "PUT Update Customer")
+      // 2. Update res.partner details
       const partnerId = (user as any)?.partner_id?.[0] || user?.id;
       if (partnerId) {
         await CustomerService.updateCustomerProfile(partnerId, {
@@ -94,6 +140,9 @@ export const EditProfileScreen: React.FC<EditProfileScreenProps> = ({ onBack }) 
       updateUser({
         name: name.trim(),
         phone: phone.trim(),
+        vehicle_type: vehicleType,
+        vehicle_number: vehicleNumber.trim().toUpperCase(),
+        license_number: licenseNumber.trim().toUpperCase(),
       });
 
       showStatusModal({
@@ -108,6 +157,9 @@ export const EditProfileScreen: React.FC<EditProfileScreenProps> = ({ onBack }) 
       updateUser({
         name: name.trim(),
         phone: phone.trim(),
+        vehicle_type: vehicleType,
+        vehicle_number: vehicleNumber.trim().toUpperCase(),
+        license_number: licenseNumber.trim().toUpperCase(),
       });
       showStatusModal({
         type: 'success',
@@ -196,14 +248,14 @@ export const EditProfileScreen: React.FC<EditProfileScreenProps> = ({ onBack }) 
             {/* Full Name */}
             <View style={styles.inputGroup}>
               <Text style={[styles.inputLabel, { color: colors.textSecondary }]}>
-                Full Name
+                Full Name *
               </Text>
               <View
                 style={[
                   styles.inputWrapper,
                   {
                     backgroundColor: colors.surface,
-                    borderColor: colors.border,
+                    borderColor: errors.name ? colors.error : colors.border,
                     borderRadius: borderRadius.md,
                   },
                 ]}
@@ -211,31 +263,38 @@ export const EditProfileScreen: React.FC<EditProfileScreenProps> = ({ onBack }) 
                 <Ionicons
                   name="person-outline"
                   size={18}
-                  color={colors.textSecondary}
+                  color={errors.name ? colors.error : colors.textSecondary}
                   style={styles.inputIcon}
                 />
                 <TextInput
                   style={[styles.textInput, { color: colors.textPrimary }]}
                   value={name}
-                  onChangeText={setName}
+                  onChangeText={(val) => {
+                    setName(val);
+                    if (errors.name) setErrors(prev => ({ ...prev, name: '' }));
+                  }}
                   placeholder="Enter your full name"
                   placeholderTextColor={colors.textTertiary}
                   autoCapitalize="words"
+                  maxLength={60}
                 />
               </View>
+              {errors.name ? (
+                <Text style={[styles.errorText, { color: colors.error }]}>{errors.name}</Text>
+              ) : null}
             </View>
 
             {/* Phone Number */}
             <View style={styles.inputGroup}>
               <Text style={[styles.inputLabel, { color: colors.textSecondary }]}>
-                Phone Number
+                Phone Number *
               </Text>
               <View
                 style={[
                   styles.inputWrapper,
                   {
                     backgroundColor: colors.surface,
-                    borderColor: colors.border,
+                    borderColor: errors.phone ? colors.error : colors.border,
                     borderRadius: borderRadius.md,
                   },
                 ]}
@@ -243,18 +302,25 @@ export const EditProfileScreen: React.FC<EditProfileScreenProps> = ({ onBack }) 
                 <Ionicons
                   name="call-outline"
                   size={18}
-                  color={colors.textSecondary}
+                  color={errors.phone ? colors.error : colors.textSecondary}
                   style={styles.inputIcon}
                 />
                 <TextInput
                   style={[styles.textInput, { color: colors.textPrimary }]}
                   value={phone}
-                  onChangeText={setPhone}
+                  onChangeText={(val) => {
+                    setPhone(val);
+                    if (errors.phone) setErrors(prev => ({ ...prev, phone: '' }));
+                  }}
                   placeholder="Enter 10-digit mobile number"
                   placeholderTextColor={colors.textTertiary}
                   keyboardType="phone-pad"
+                  maxLength={14}
                 />
               </View>
+              {errors.phone ? (
+                <Text style={[styles.errorText, { color: colors.error }]}>{errors.phone}</Text>
+              ) : null}
             </View>
 
             {/* Email Address (Read-only / primary login) */}
@@ -284,6 +350,7 @@ export const EditProfileScreen: React.FC<EditProfileScreenProps> = ({ onBack }) 
                   editable={false}
                   placeholder="Email address"
                   placeholderTextColor={colors.textTertiary}
+                  maxLength={80}
                 />
                 <Ionicons
                   name="lock-closed"
@@ -295,6 +362,78 @@ export const EditProfileScreen: React.FC<EditProfileScreenProps> = ({ onBack }) 
               <Text style={[styles.helperText, { color: colors.textTertiary }]}>
                 Primary login email cannot be edited directly.
               </Text>
+            </View>
+
+            {/* Vehicle Number */}
+            <View style={styles.inputGroup}>
+              <Text style={[styles.inputLabel, { color: colors.textSecondary }]}>
+                Vehicle Registration Number
+              </Text>
+              <View
+                style={[
+                  styles.inputWrapper,
+                  {
+                    backgroundColor: colors.surface,
+                    borderColor: errors.vehicleNumber ? colors.error : colors.border,
+                    borderRadius: borderRadius.md,
+                  },
+                ]}
+              >
+                <Ionicons
+                  name="bicycle-outline"
+                  size={18}
+                  color={errors.vehicleNumber ? colors.error : colors.textSecondary}
+                  style={styles.inputIcon}
+                />
+                <TextInput
+                  style={[styles.textInput, { color: colors.textPrimary }]}
+                  value={vehicleNumber}
+                  onChangeText={(val) => {
+                    setVehicleNumber(val.toUpperCase());
+                    if (errors.vehicleNumber) setErrors(prev => ({ ...prev, vehicleNumber: '' }));
+                  }}
+                  placeholder="e.g. TN70CC7890"
+                  placeholderTextColor={colors.textTertiary}
+                  autoCapitalize="characters"
+                  maxLength={15}
+                />
+              </View>
+              {errors.vehicleNumber ? (
+                <Text style={[styles.errorText, { color: colors.error }]}>{errors.vehicleNumber}</Text>
+              ) : null}
+            </View>
+
+            {/* License Number */}
+            <View style={styles.inputGroup}>
+              <Text style={[styles.inputLabel, { color: colors.textSecondary }]}>
+                Driving License Number
+              </Text>
+              <View
+                style={[
+                  styles.inputWrapper,
+                  {
+                    backgroundColor: colors.surface,
+                    borderColor: colors.border,
+                    borderRadius: borderRadius.md,
+                  },
+                ]}
+              >
+                <Ionicons
+                  name="card-outline"
+                  size={18}
+                  color={colors.textSecondary}
+                  style={styles.inputIcon}
+                />
+                <TextInput
+                  style={[styles.textInput, { color: colors.textPrimary }]}
+                  value={licenseNumber}
+                  onChangeText={(val) => setLicenseNumber(val.toUpperCase())}
+                  placeholder="e.g. TN7020230007890"
+                  placeholderTextColor={colors.textTertiary}
+                  autoCapitalize="characters"
+                  maxLength={20}
+                />
+              </View>
             </View>
           </View>
           )}
@@ -405,6 +544,12 @@ const styles = StyleSheet.create({
     fontSize: 11,
     marginTop: 4,
     marginLeft: 2,
+  },
+  errorText: {
+    fontSize: 11,
+    marginTop: 4,
+    marginLeft: 2,
+    fontWeight: '600',
   },
   saveButton: {
     height: 50,

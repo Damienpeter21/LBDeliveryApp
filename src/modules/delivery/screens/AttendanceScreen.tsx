@@ -34,7 +34,8 @@ export const AttendanceScreen: React.FC<AttendanceScreenProps> = ({ onBack }) =>
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
-  const [isCheckedIn, setIsCheckedIn] = useState(false);
+  // Fully online application: default driver to Online
+  const [isCheckedIn, setIsCheckedIn] = useState(true);
   const [summary, setSummary] = useState<AttendanceSummary | null>(null);
 
   const fetchAttendance = useCallback(async (isRefresh = false) => {
@@ -43,7 +44,9 @@ export const AttendanceScreen: React.FC<AttendanceScreenProps> = ({ onBack }) =>
 
     try {
       const storedShift = await storage.getString(SHIFT_STORAGE_KEY);
-      if (storedShift === 'true') {
+      if (storedShift === 'false') {
+        setIsCheckedIn(false);
+      } else {
         setIsCheckedIn(true);
       }
 
@@ -53,9 +56,17 @@ export const AttendanceScreen: React.FC<AttendanceScreenProps> = ({ onBack }) =>
       const data = res?.result !== undefined ? res.result : res;
       if (data) {
         setSummary(data);
-        if (data.isCheckedIn !== undefined) {
-          setIsCheckedIn(Boolean(data.isCheckedIn));
-          await storage.set(SHIFT_STORAGE_KEY, String(Boolean(data.isCheckedIn)));
+        const rawData: any = data;
+        if (rawData.isCheckedIn !== undefined) {
+          setIsCheckedIn(Boolean(rawData.isCheckedIn));
+          await storage.set(SHIFT_STORAGE_KEY, String(Boolean(rawData.isCheckedIn)));
+        } else if (rawData.is_checked_in !== undefined) {
+          setIsCheckedIn(Boolean(rawData.is_checked_in));
+          await storage.set(SHIFT_STORAGE_KEY, String(Boolean(rawData.is_checked_in)));
+        } else if (rawData.attendance_state) {
+          const isOnline = rawData.attendance_state === 'checked_in';
+          setIsCheckedIn(isOnline);
+          await storage.set(SHIFT_STORAGE_KEY, String(isOnline));
         }
       }
     } catch (err) {

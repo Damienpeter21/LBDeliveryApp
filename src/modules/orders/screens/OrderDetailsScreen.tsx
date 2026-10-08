@@ -70,6 +70,30 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
   );
   const [customCancelReason, setCustomCancelReason] = useState<string>('');
 
+  // Razorpay Online Payment State
+  const [showRazorpayModal, setShowRazorpayModal] = useState<boolean>(false);
+  const [razorpayPaymentId, setRazorpayPaymentId] = useState<string>('');
+  const [razorpayOrderId, setRazorpayOrderId] = useState<string>(
+    `order_${Date.now().toString().slice(-8)}`,
+  );
+  const [razorpaySignature, setRazorpaySignature] = useState<string>('');
+  const [isOnlinePaid, setIsOnlinePaid] = useState<boolean>(
+    !currentOrder.isCod || currentOrder.paymentStatus === 'paid',
+  );
+
+  // Reject Order Confirmation Modal State
+  const [showRejectModal, setShowRejectModal] = useState<boolean>(false);
+
+  // Field validation error states
+  const [deliveryOtpError, setDeliveryOtpError] = useState<string | null>(null);
+  const [signedByError, setSignedByError] = useState<string | null>(null);
+  const [cashAmountError, setCashAmountError] = useState<string | null>(null);
+  const [razorpayError, setRazorpayError] = useState<string | null>(null);
+  const [cancelReasonError, setCancelReasonError] = useState<string | null>(null);
+
+  // Payment Status Check State
+  const [checkingPayment, setCheckingPayment] = useState<boolean>(false);
+
   const pickingId = currentOrder.pickingId || Number(currentOrder.id) || 19;
   const orderId = Number(currentOrder.id) || pickingId;
 
@@ -180,10 +204,100 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
     }
   };
 
+  const handleRejectOrder = async () => {
+    setActionLoading(true);
+    try {
+      await OrderService.rejectOrder(pickingId, driverUserId);
+      setShowRejectModal(false);
+      showStatusModal({
+        type: 'info',
+        title: 'Order Declined',
+        message: `Order #${currentOrder.orderNumber} was declined and returned to available orders.`,
+      });
+      setTimeout(() => onBack(), 1200);
+    } catch (err: any) {
+      showStatusModal({
+        type: 'error',
+        title: 'Reject Failed',
+        message: err?.message || 'Could not reject order',
+      });
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleCheckPaymentStatus = async () => {
+    setCheckingPayment(true);
+    try {
+      const res = await OrderService.checkPaymentStatus(orderId);
+      const data = res?.result !== undefined ? res.result : res;
+      const statusText = data?.payment_status || data?.status || 'pending';
+      const msg =
+        data?.message ||
+        `Current payment status for order #${currentOrder.orderNumber}: ${statusText.toUpperCase()}`;
+
+      if (statusText === 'paid' || statusText === 'success') {
+        setIsOnlinePaid(true);
+        setCurrentOrder(prev => ({ ...prev, paymentStatus: 'paid' }));
+      }
+
+      showStatusModal({
+        type: statusText === 'paid' || statusText === 'success' ? 'success' : 'info',
+        title: 'Payment Status',
+        message: msg,
+      });
+    } catch (err: any) {
+      showStatusModal({
+        type: 'error',
+        title: 'Status Check Failed',
+        message: err?.message || 'Could not verify payment status from server.',
+      });
+    } finally {
+      setCheckingPayment(false);
+    }
+  };
+
+  const handleProcessRazorpay = async () => {
+    setRazorpayError(null);
+    const pId = razorpayPaymentId.trim();
+    if (!pId) {
+      setRazorpayError('Razorpay Payment ID is required (e.g. pay_...)');
+      return;
+    }
+    setActionLoading(true);
+    try {
+      await OrderService.processRazorpayPayment({
+        order_id: orderId,
+        journal_id: 6,
+        razorpay_payment_id: pId,
+        razorpay_order_id: razorpayOrderId.trim() || `order_${Date.now().toString().slice(-8)}`,
+        razorpay_signature: razorpaySignature.trim() || 'rzp_verified_signature',
+        payment_status: 'success',
+      });
+      setIsOnlinePaid(true);
+      setShowRazorpayModal(false);
+      setCurrentOrder(prev => ({ ...prev, paymentStatus: 'paid' }));
+      showStatusModal({
+        type: 'success',
+        title: 'Online Payment Recorded',
+        message: `Payment of ₹${currentOrder.totalAmount.toFixed(2)} recorded successfully via Razorpay (ID: ${pId}).`,
+      });
+    } catch (err: any) {
+      showStatusModal({
+        type: 'error',
+        title: 'Payment Processing Failed',
+        message: err?.message || 'Failed to record online payment. Please verify IDs.',
+      });
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
   const handleCollectCash = async () => {
+    setCashAmountError(null);
     const amt = parseFloat(cashCollectedAmount);
     if (isNaN(amt) || amt <= 0) {
-      Alert.alert('Invalid Amount', 'Please enter a valid collected amount.');
+      setCashAmountError('Please enter a valid positive amount.');
       return;
     }
 
@@ -215,8 +329,20 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
   };
 
   const handleDeliverConfirm = async () => {
-    if (!deliveryOtp.trim()) {
-      Alert.alert('OTP Required', 'Please enter the 6-digit delivery OTP provided by the customer.');
+    setDeliveryOtpError(null);
+    setSignedByError(null);
+
+    const otp = deliveryOtp.trim();
+    if (!otp) {
+      setDeliveryOtpError('Delivery OTP is required');
+      return;
+    }
+    if (!/^\d{6}$/.test(otp)) {
+      setDeliveryOtpError('Delivery OTP must be exactly 6 digits');
+      return;
+    }
+    if (!signedBy.trim()) {
+      setSignedByError('Recipient name is required');
       return;
     }
 
@@ -227,7 +353,7 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
         driver_user_id: driverUserId,
         signed_by: signedBy.trim() || 'Customer',
         signature_base64: '',
-        delivery_otp: deliveryOtp.trim(),
+        delivery_otp: otp,
         latitude: 12.5683,
         longitude: 77.8284,
       });
@@ -251,13 +377,14 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
   };
 
   const handleCancelConfirm = async () => {
+    setCancelReasonError(null);
     const reason =
       selectedCancelReason === 'Other reason (please specify)'
         ? customCancelReason.trim()
         : selectedCancelReason;
 
-    if (!reason) {
-      Alert.alert('Reason Required', 'Please choose or enter a cancellation reason.');
+    if (!reason || reason.length < 5) {
+      setCancelReasonError('Cancellation reason must be at least 5 characters');
       return;
     }
 
@@ -501,6 +628,59 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
             </Text>
           </View>
 
+          {/* Payment Status Row with Live Check Button */}
+          <View style={styles.billingRow}>
+            <Text style={[styles.billingLabel, { color: colors.textSecondary }]}>Payment Status:</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <View
+                style={[
+                  styles.badgePill,
+                  {
+                    backgroundColor:
+                      isOnlinePaid || currentOrder.paymentStatus === 'paid' || isCashCollected
+                        ? '#DCFCE7'
+                        : '#FEF3C7',
+                    marginRight: 8,
+                  },
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.badgePillText,
+                    {
+                      color:
+                        isOnlinePaid || currentOrder.paymentStatus === 'paid' || isCashCollected
+                          ? '#15803D'
+                          : '#B45309',
+                    },
+                  ]}
+                >
+                  {isOnlinePaid || currentOrder.paymentStatus === 'paid'
+                    ? 'PAID (ONLINE)'
+                    : isCashCollected
+                    ? 'PAID (CASH)'
+                    : 'PAYMENT PENDING'}
+                </Text>
+              </View>
+
+              <TouchableOpacity
+                style={[styles.checkStatusBtn, { borderColor: colors.primary }]}
+                onPress={handleCheckPaymentStatus}
+                disabled={checkingPayment}
+                activeOpacity={0.7}
+              >
+                {checkingPayment ? (
+                  <ActivityIndicator size="small" color={colors.primary} />
+                ) : (
+                  <>
+                    <Ionicons name="refresh-outline" size={13} color={colors.primary} style={{ marginRight: 3 }} />
+                    <Text style={[styles.checkStatusBtnText, { color: colors.primary }]}>Verify</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+
           {currentOrder.isCod && (
             <View style={[styles.codStatusBox, { backgroundColor: isCashCollected ? '#DCFCE7' : '#FEF3C7' }]}>
               <Ionicons
@@ -512,7 +692,9 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
               <Text style={[styles.codStatusText, { color: isCashCollected ? '#16A34A' : '#D97706' }]}>
                 {isCashCollected
                   ? `COD Cash of ₹${currentOrder.totalAmount.toFixed(2)} Collected`
-                  : `Please collect ₹${currentOrder.totalAmount.toFixed(2)} in cash from customer`}
+                  : isOnlinePaid
+                  ? `Payment completed online via UPI / Razorpay`
+                  : `Please collect ₹${currentOrder.totalAmount.toFixed(2)} in cash or via online UPI`}
               </Text>
             </View>
           )}
@@ -574,10 +756,10 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
           <View style={styles.actionRowTwo}>
             <TouchableOpacity
               style={[styles.outlineBtn, { borderColor: colors.error }]}
-              onPress={() => setShowCancelModal(true)}
+              onPress={() => setShowRejectModal(true)}
               disabled={actionLoading}
             >
-              <Text style={[styles.outlineBtnText, { color: colors.error }]}>Reject</Text>
+              <Text style={[styles.outlineBtnText, { color: colors.error }]}>Reject Order</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.primaryActionBtn, { backgroundColor: colors.primary }]}
@@ -663,26 +845,47 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
         )}
 
         {currentOrder.status === 'arrived_customer' && (
-          <View style={styles.actionRowTwo}>
-            {currentOrder.isCod && !isCashCollected ? (
+          <View style={{ gap: 8, width: '100%' }}>
+            {!isCashCollected && !isOnlinePaid && (
+              <View style={styles.actionRowTwo}>
+                <TouchableOpacity
+                  style={[styles.primaryActionBtn, { backgroundColor: '#D97706', flex: 1 }]}
+                  onPress={() => setShowCodModal(true)}
+                  disabled={actionLoading}
+                >
+                  <Ionicons name="cash-outline" size={17} color="#FFFFFF" style={{ marginRight: 5 }} />
+                  <Text style={[styles.primaryActionBtnText, { color: '#FFFFFF', fontSize: 13 }]}>Collect Cash</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.primaryActionBtn, { backgroundColor: '#0284C7', flex: 1 }]}
+                  onPress={() => setShowRazorpayModal(true)}
+                  disabled={actionLoading}
+                >
+                  <Ionicons name="card-outline" size={17} color="#FFFFFF" style={{ marginRight: 5 }} />
+                  <Text style={[styles.primaryActionBtnText, { color: '#FFFFFF', fontSize: 13 }]}>Online (UPI)</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            <View style={styles.actionRowTwo}>
               <TouchableOpacity
-                style={[styles.primaryActionBtn, { backgroundColor: '#D97706', flex: 1 }]}
-                onPress={() => setShowCodModal(true)}
+                style={[styles.outlineBtn, { borderColor: colors.error, flex: 0.8 }]}
+                onPress={() => setShowCancelModal(true)}
                 disabled={actionLoading}
               >
-                <Ionicons name="cash-outline" size={18} color="#FFFFFF" style={{ marginRight: 6 }} />
-                <Text style={[styles.primaryActionBtnText, { color: '#FFFFFF' }]}>Collect Cash</Text>
+                <Text style={[styles.outlineBtnText, { color: colors.error }]}>Cancel</Text>
               </TouchableOpacity>
-            ) : null}
 
-            <TouchableOpacity
-              style={[styles.primaryActionBtn, { backgroundColor: colors.primary, flex: 1.5 }]}
-              onPress={() => setShowDeliverModal(true)}
-              disabled={actionLoading}
-            >
-              <Ionicons name="shield-checkmark-outline" size={18} color={colors.onPrimary} style={{ marginRight: 6 }} />
-              <Text style={[styles.primaryActionBtnText, { color: colors.onPrimary }]}>Deliver Order (OTP)</Text>
-            </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.primaryActionBtn, { backgroundColor: colors.primary, flex: 1.5 }]}
+                onPress={() => setShowDeliverModal(true)}
+                disabled={actionLoading}
+              >
+                <Ionicons name="shield-checkmark-outline" size={18} color={colors.onPrimary} style={{ marginRight: 6 }} />
+                <Text style={[styles.primaryActionBtnText, { color: colors.onPrimary }]}>Deliver Order (OTP)</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         )}
 
@@ -711,35 +914,64 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
         >
           <View style={[styles.modalCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <View style={styles.modalHeaderRow}>
-              <Text style={[styles.modalTitle, { color: colors.textPrimary }]}>Verify Delivery</Text>
+              <Text style={[styles.modalTitle, { color: colors.textPrimary }]}>Verify & Deliver</Text>
               <TouchableOpacity onPress={() => setShowDeliverModal(false)}>
                 <Ionicons name="close" size={22} color={colors.textSecondary} />
               </TouchableOpacity>
             </View>
 
             <Text style={[styles.modalSub, { color: colors.textSecondary }]}>
-              Ask the customer for their 6-digit Delivery OTP to complete this delivery.
+              Ask the customer for the 6-digit OTP sent to their mobile to confirm package handover.
             </Text>
 
-            <Text style={[styles.inputLabel, { color: colors.textPrimary }]}>Delivery OTP *</Text>
+            <Text style={[styles.inputLabel, { color: colors.textPrimary }]}>Delivery OTP (6 digits) *</Text>
             <TextInput
-              style={[styles.textInput, { backgroundColor: colors.surfaceVariant, color: colors.textPrimary, borderColor: colors.border }]}
+              style={[
+                styles.textInput,
+                {
+                  backgroundColor: colors.surfaceVariant,
+                  color: colors.textPrimary,
+                  borderColor: deliveryOtpError ? colors.error : colors.border,
+                },
+              ]}
               placeholder="e.g. 111000"
               placeholderTextColor={colors.textSecondary}
               value={deliveryOtp}
-              onChangeText={setDeliveryOtp}
+              onChangeText={text => {
+                setDeliveryOtp(text.replace(/[^0-9]/g, ''));
+                if (deliveryOtpError) setDeliveryOtpError(null);
+              }}
               keyboardType="number-pad"
               maxLength={6}
             />
+            {!!deliveryOtpError && (
+              <Text style={[styles.inlineError, { color: colors.error }]}>{deliveryOtpError}</Text>
+            )}
 
-            <Text style={[styles.inputLabel, { color: colors.textPrimary, marginTop: 12 }]}>Signed By / Received By</Text>
+            <Text style={[styles.inputLabel, { color: colors.textPrimary, marginTop: 12 }]}>
+              Recipient / Signed By *
+            </Text>
             <TextInput
-              style={[styles.textInput, { backgroundColor: colors.surfaceVariant, color: colors.textPrimary, borderColor: colors.border }]}
+              style={[
+                styles.textInput,
+                {
+                  backgroundColor: colors.surfaceVariant,
+                  color: colors.textPrimary,
+                  borderColor: signedByError ? colors.error : colors.border,
+                },
+              ]}
               placeholder="Customer Name"
               placeholderTextColor={colors.textSecondary}
               value={signedBy}
-              onChangeText={setSignedBy}
+              onChangeText={text => {
+                setSignedBy(text);
+                if (signedByError) setSignedByError(null);
+              }}
+              maxLength={50}
             />
+            {!!signedByError && (
+              <Text style={[styles.inlineError, { color: colors.error }]}>{signedByError}</Text>
+            )}
 
             <TouchableOpacity
               style={[styles.confirmBtn, { backgroundColor: colors.primary, marginTop: 20 }]}
@@ -770,19 +1002,38 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
               </TouchableOpacity>
             </View>
 
-            <Text style={[styles.inputLabel, { color: colors.textPrimary }]}>Amount to Collect (₹) *</Text>
+            <Text style={[styles.modalSub, { color: colors.textSecondary }]}>
+              Collect physical cash from customer for order #{currentOrder.orderNumber}.
+            </Text>
+
+            <Text style={[styles.inputLabel, { color: colors.textPrimary }]}>Amount Collected (₹) *</Text>
             <TextInput
-              style={[styles.textInput, { backgroundColor: colors.surfaceVariant, color: colors.textPrimary, borderColor: colors.border }]}
+              style={[
+                styles.textInput,
+                {
+                  backgroundColor: colors.surfaceVariant,
+                  color: colors.textPrimary,
+                  borderColor: cashAmountError ? colors.error : colors.border,
+                },
+              ]}
               value={cashCollectedAmount}
-              onChangeText={setCashCollectedAmount}
+              onChangeText={text => {
+                setCashCollectedAmount(text);
+                if (cashAmountError) setCashAmountError(null);
+              }}
               keyboardType="decimal-pad"
+              maxLength={10}
             />
+            {!!cashAmountError && (
+              <Text style={[styles.inlineError, { color: colors.error }]}>{cashAmountError}</Text>
+            )}
 
             <Text style={[styles.inputLabel, { color: colors.textPrimary, marginTop: 12 }]}>Payment Reference</Text>
             <TextInput
               style={[styles.textInput, { backgroundColor: colors.surfaceVariant, color: colors.textPrimary, borderColor: colors.border }]}
               value={paymentRef}
               onChangeText={setPaymentRef}
+              maxLength={40}
             />
 
             <TouchableOpacity
@@ -800,7 +1051,114 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
         </KeyboardAvoidingView>
       </Modal>
 
-      {/* ── Modal 3: Cancellation Reason ───────────────────────────────── */}
+      {/* ── Modal 3: Online Razorpay / UPI Collection ─────────────────── */}
+      <Modal visible={showRazorpayModal} transparent animationType="slide">
+        <KeyboardAvoidingView
+          style={styles.modalBackdrop}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <View style={[styles.modalCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <View style={styles.modalHeaderRow}>
+              <Text style={[styles.modalTitle, { color: colors.textPrimary }]}>Record Online Payment</Text>
+              <TouchableOpacity onPress={() => setShowRazorpayModal(false)}>
+                <Ionicons name="close" size={22} color={colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={[styles.modalSub, { color: colors.textSecondary }]}>
+              Record Razorpay / UPI payment verification for order #{currentOrder.orderNumber} (₹{currentOrder.totalAmount.toFixed(2)}).
+            </Text>
+
+            <Text style={[styles.inputLabel, { color: colors.textPrimary }]}>Razorpay Payment ID *</Text>
+            <TextInput
+              style={[
+                styles.textInput,
+                {
+                  backgroundColor: colors.surfaceVariant,
+                  color: colors.textPrimary,
+                  borderColor: razorpayError ? colors.error : colors.border,
+                },
+              ]}
+              placeholder="e.g. pay_29QQoUBi66xm2f"
+              placeholderTextColor={colors.textSecondary}
+              value={razorpayPaymentId}
+              onChangeText={text => {
+                setRazorpayPaymentId(text);
+                if (razorpayError) setRazorpayError(null);
+              }}
+              autoCapitalize="none"
+              maxLength={50}
+            />
+            {!!razorpayError && (
+              <Text style={[styles.inlineError, { color: colors.error }]}>{razorpayError}</Text>
+            )}
+
+            <Text style={[styles.inputLabel, { color: colors.textPrimary, marginTop: 12 }]}>Razorpay Order ID</Text>
+            <TextInput
+              style={[styles.textInput, { backgroundColor: colors.surfaceVariant, color: colors.textPrimary, borderColor: colors.border }]}
+              placeholder="e.g. order_9A33XWu170gUtm"
+              placeholderTextColor={colors.textSecondary}
+              value={razorpayOrderId}
+              onChangeText={setRazorpayOrderId}
+              autoCapitalize="none"
+              maxLength={50}
+            />
+
+            <TouchableOpacity
+              style={[styles.confirmBtn, { backgroundColor: '#0284C7', marginTop: 20 }]}
+              onPress={handleProcessRazorpay}
+              disabled={actionLoading}
+            >
+              {actionLoading ? (
+                <ActivityIndicator color="#FFFFFF" />
+              ) : (
+                <Text style={[styles.confirmBtnText, { color: '#FFFFFF' }]}>Verify & Record Online Payment</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      {/* ── Modal 4: Reject Order Picking Confirmation ───────────────── */}
+      <Modal visible={showRejectModal} transparent animationType="fade">
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.modalCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <View style={styles.modalHeaderRow}>
+              <Text style={[styles.modalTitle, { color: colors.error }]}>Decline Order</Text>
+              <TouchableOpacity onPress={() => setShowRejectModal(false)}>
+                <Ionicons name="close" size={22} color={colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={[styles.modalSub, { color: colors.textSecondary }]}>
+              Are you sure you want to decline order #{currentOrder.orderNumber}? It will be returned to the fleet pool for other drivers.
+            </Text>
+
+            <View style={{ flexDirection: 'row', gap: 10, marginTop: 16 }}>
+              <TouchableOpacity
+                style={[styles.outlineBtn, { borderColor: colors.border, flex: 1 }]}
+                onPress={() => setShowRejectModal(false)}
+              >
+                <Text style={[styles.outlineBtnText, { color: colors.textPrimary }]}>Go Back</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.confirmBtn, { backgroundColor: colors.error, flex: 1, marginTop: 0 }]}
+                onPress={handleRejectOrder}
+                disabled={actionLoading}
+              >
+                {actionLoading ? (
+                  <ActivityIndicator color="#FFFFFF" />
+                ) : (
+                  <Text style={[styles.confirmBtnText, { color: '#FFFFFF' }]}>Decline Order</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── Modal 5: Cancellation Reason ───────────────────────────────── */}
       <Modal visible={showCancelModal} transparent animationType="slide">
         <View style={styles.modalBackdrop}>
           <View style={[styles.modalCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -827,7 +1185,10 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
                       backgroundColor: isSelected ? '#FEE2E2' : colors.surfaceVariant,
                     },
                   ]}
-                  onPress={() => setSelectedCancelReason(r)}
+                  onPress={() => {
+                    setSelectedCancelReason(r);
+                    if (cancelReasonError) setCancelReasonError(null);
+                  }}
                   activeOpacity={0.7}
                 >
                   <Ionicons
@@ -840,6 +1201,12 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
                 </TouchableOpacity>
               );
             })}
+
+            {!!cancelReasonError && (
+              <Text style={[styles.inlineError, { color: colors.error, marginTop: 6 }]}>
+                {cancelReasonError}
+              </Text>
+            )}
 
             <TouchableOpacity
               style={[styles.confirmBtn, { backgroundColor: colors.error, marginTop: 16 }]}
@@ -1181,5 +1548,22 @@ const styles = StyleSheet.create({
   reasonOptionText: {
     flex: 1,
     fontSize: 12.5,
+  },
+  inlineError: {
+    fontSize: 12,
+    fontWeight: '600',
+    marginTop: 4,
+  },
+  checkStatusBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  checkStatusBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
   },
 });

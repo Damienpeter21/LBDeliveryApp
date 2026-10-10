@@ -124,7 +124,12 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
       confirmText: 'Log Out',
       cancelText: 'Cancel',
       isDestructive: true,
-      onConfirm: logout,
+      onConfirm: async () => {
+        await logout();
+        if (onNavigateToLogin) {
+          onNavigateToLogin();
+        }
+      },
     });
   };
 

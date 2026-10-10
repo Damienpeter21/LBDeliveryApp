@@ -15,12 +15,15 @@ import {
 } from '../modules/profile';
 
 import { SplashScreen } from '../modules/splash';
+import { useAuth } from '../modules/auth';
 import { AuthNavigator } from './AuthNavigator';
 import { RootScreenProps, RootStackParamList } from './types';
 
 const RootStack = createNativeStackNavigator<RootStackParamList>();
 
 export const RootNavigator: React.FC = () => {
+  const { isAuthenticated } = useAuth();
+
   return (
     <NavigationContainer>
       <RootStack.Navigator
@@ -33,7 +36,13 @@ export const RootNavigator: React.FC = () => {
         <RootStack.Screen name="Splash">
           {(props: RootScreenProps<'Splash'>) => (
             <SplashScreen
-              onFinish={() => props.navigation.replace('Home')}
+              onFinish={() => {
+                if (isAuthenticated) {
+                  props.navigation.replace('Home');
+                } else {
+                  props.navigation.replace('Auth', { screen: 'Login' });
+                }
+              }}
             />
           )}
         </RootStack.Screen>
@@ -50,7 +59,7 @@ export const RootNavigator: React.FC = () => {
               onNavigateToCashHandover={() => props.navigation.navigate('CashHandover')}
               onNavigateToProfile={() => props.navigation.navigate('Profile')}
               onRequireAuth={() =>
-                props.navigation.navigate('Auth', { screen: 'Login' })
+                props.navigation.replace('Auth', { screen: 'Login' })
               }
             />
           )}
@@ -65,7 +74,7 @@ export const RootNavigator: React.FC = () => {
                 props.navigation.navigate('OrderDetails', { order })
               }
               onNavigateToLogin={() =>
-                props.navigation.navigate('Auth', { screen: 'Login' })
+                props.navigation.replace('Auth', { screen: 'Login' })
               }
             />
           )}
@@ -105,7 +114,7 @@ export const RootNavigator: React.FC = () => {
             <ProfileScreen
               onBack={() => props.navigation.goBack()}
               onNavigateToLogin={() =>
-                props.navigation.navigate('Auth', { screen: 'Login' })
+                props.navigation.replace('Auth', { screen: 'Login' })
               }
               onNavigateToOrders={() => props.navigation.navigate('Orders')}
               onNavigateToSavedAddresses={() => {}}
@@ -185,9 +194,13 @@ export const RootNavigator: React.FC = () => {
         >
           {(props: RootScreenProps<'Auth'>) => (
             <AuthNavigator
-              onClose={() => props.navigation.goBack()}
+              onClose={() => {
+                if (props.navigation.canGoBack() && isAuthenticated) {
+                  props.navigation.goBack();
+                }
+              }}
               onFinishAuth={() => {
-                props.navigation.goBack();
+                props.navigation.replace('Home');
               }}
             />
           )}

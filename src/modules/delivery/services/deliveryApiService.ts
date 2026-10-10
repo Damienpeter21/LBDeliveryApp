@@ -107,15 +107,37 @@ export class DeliveryApiService {
     const login = payload.login.trim();
     const password = payload.password.trim();
 
-    return callDeliveryEndpoint(
-      '/web/session/authenticate',
-      {
-        db,
-        login,
-        password,
-      },
-      true, // withMethodCall
-    );
+    try {
+      return await callDeliveryEndpoint(
+        '/web/session/authenticate',
+        {
+          db,
+          login,
+          password,
+        },
+        true, // withMethodCall
+      );
+    } catch (err: any) {
+      const errMsg = String(err?.message || '');
+      if (
+        (errMsg.includes('OperationalError') ||
+          errMsg.includes('does not exist') ||
+          errMsg.includes('database')) &&
+        ODOO_CONFIG.ALT_DB &&
+        db !== ODOO_CONFIG.ALT_DB
+      ) {
+        return await callDeliveryEndpoint(
+          '/web/session/authenticate',
+          {
+            db: ODOO_CONFIG.ALT_DB,
+            login,
+            password,
+          },
+          true,
+        );
+      }
+      throw err;
+    }
   }
 
   /**

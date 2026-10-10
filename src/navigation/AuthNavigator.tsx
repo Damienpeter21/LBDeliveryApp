@@ -1,5 +1,6 @@
 import React from 'react';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { useAuth } from '../modules/auth/hooks/useAuth';
 import {
   ForgotPasswordScreen,
   LoginScreen,
@@ -19,6 +20,8 @@ export const AuthNavigator: React.FC<AuthNavigatorProps> = ({
   onFinishAuth,
   onClose,
 }) => {
+  const { isAuthenticated } = useAuth();
+
   return (
     <Stack.Navigator
       initialRouteName="Login"
@@ -43,7 +46,14 @@ export const AuthNavigator: React.FC<AuthNavigatorProps> = ({
                 props.navigation.goBack();
               }
             }}
-            onBack={onClose || (props.navigation.canGoBack() ? () => props.navigation.goBack() : undefined)}
+            onBack={
+              isAuthenticated && (onClose || props.navigation.canGoBack())
+                ? () => {
+                    if (onClose) onClose();
+                    else if (props.navigation.canGoBack()) props.navigation.goBack();
+                  }
+                : undefined
+            }
           />
         )}
       </Stack.Screen>

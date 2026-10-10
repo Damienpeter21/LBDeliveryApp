@@ -6,6 +6,7 @@ import { AuthService, AuthUser, LoginPayload, RegisterPayload } from '../service
 interface AuthContextType {
   user: AuthUser | null;
   isAuthenticated: boolean;
+  isInitialized: boolean;
   isLoading: boolean;
   error: string | null;
   login: (payload: LoginPayload) => Promise<boolean>;
@@ -23,6 +24,7 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [isInitialized, setIsInitialized] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
   // Restore authenticated user session from AsyncStorage on app launch
@@ -45,6 +47,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
       } catch (err) {
         console.error('Failed to restore auth session from storage:', err);
+      } finally {
+        if (isMounted) {
+          setIsInitialized(true);
+        }
       }
     };
 
@@ -174,6 +180,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       value={{
         user,
         isAuthenticated: !!user,
+        isInitialized,
         isLoading,
         error,
         login,

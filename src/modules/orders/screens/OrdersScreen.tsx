@@ -53,12 +53,16 @@ export const OrdersScreen: React.FC<OrdersScreenProps> = ({
   const isFirstMountRef = React.useRef(true);
   useFocusEffect(
     useCallback(() => {
+      if (!isAuthenticated && onNavigateToLogin) {
+        onNavigateToLogin();
+        return;
+      }
       if (isFirstMountRef.current) {
         isFirstMountRef.current = false;
         return;
       }
       refreshOrders();
-    }, [refreshOrders]),
+    }, [isAuthenticated, onNavigateToLogin, refreshOrders]),
   );
 
   const tabs: { id: DeliveryTabFilter; label: string; count: number; icon: string }[] = useMemo(

@@ -117,9 +117,19 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
 
   useFocusEffect(
     useCallback(() => {
+      if (!isAuthenticated && onRequireAuth) {
+        onRequireAuth();
+        return;
+      }
       loadDashboardData(false);
-    }, [loadDashboardData]),
+    }, [isAuthenticated, onRequireAuth, loadDashboardData]),
   );
+
+  useEffect(() => {
+    if (!isAuthenticated && onRequireAuth) {
+      onRequireAuth();
+    }
+  }, [isAuthenticated, onRequireAuth]);
 
   const handleToggleCheckIn = async () => {
     if (!isAuthenticated && onRequireAuth) {

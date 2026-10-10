@@ -37,6 +37,7 @@ export interface DeliveryPartner {
 export interface Order {
   id: string;
   pickingId?: number;
+  saleOrderId?: number;
   orderNumber: string;
   origin?: string;
   date: string;
@@ -57,6 +58,7 @@ export interface Order {
   eta?: string;
   deliveryPartner?: DeliveryPartner;
   deliveryFee?: number;
+  deliveryOtp?: string;
   cancelReason?: string;
   latitude?: number;
   longitude?: number;

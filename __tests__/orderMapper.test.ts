@@ -90,5 +90,38 @@ describe('orderMapper unit tests', () => {
       expect(mapOdooStateToOrderStatus('assigned', 'unassigned', null)).toBe('unassigned');
       expect(mapOdooStateToOrderStatus('draft', undefined, null)).toBe('unassigned');
     });
+
+    it('maps active accepted deliveries and completed done pickings', () => {
+      expect(mapOdooStateToOrderStatus('confirmed', 'accepted', 2)).toBe('assigned');
+      expect(mapOdooStateToOrderStatus('done', 'arrived_customer', 2)).toBe('arrived_customer');
+    });
+
+    it('maps live Odoo all_my_delivery picking object correctly', () => {
+      const liveDeliveredPicking = {
+        picking_id: 73,
+        picking_reference: 'WH/OUT/00073',
+        origin: 'S00195',
+        delivery_app_status: 'delivered',
+        picking_state: 'done',
+        customer_name: 'Felix Kumar Z',
+        customer_phone: '8870809004',
+        customer_address: '76/A2, Kembathapalli, 635107',
+        scheduled_date: '2026-10-10 10:00:00',
+      };
+      const order = mapDeliveryPickingToOrder(liveDeliveredPicking);
+      expect(order.orderNumber).toBe('WH/OUT/00073');
+      expect(order.status).toBe('delivered');
+      expect(order.deliveryAddress).toBe('76/A2, Kembathapalli, 635107');
+
+      const liveActivePicking = {
+        picking_id: 76,
+        picking_reference: 'WH/OUT/00076',
+        delivery_app_status: 'accepted',
+        picking_state: 'confirmed',
+        customer_address: '76/A2, Kembathapalli, 635107',
+      };
+      const activeOrder = mapDeliveryPickingToOrder(liveActivePicking);
+      expect(activeOrder.status).toBe('assigned');
+    });
   });
 });

@@ -177,6 +177,15 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
     setActionLoading(true);
     try {
       await DeliveryApiService.acceptOrder(pickingId, driverUserId);
+
+      // Optimistically move order from available to active so UI counters update immediately
+      setUnassignedOrders(prev => prev.filter(o => (o.pickingId || Number(o.id)) !== pickingId));
+      setActiveDeliveries(prev => {
+        const alreadyIn = prev.some(o => (o.pickingId || Number(o.id)) === pickingId);
+        if (alreadyIn) return prev;
+        return [{ ...order, status: 'assigned' }, ...prev];
+      });
+
       showStatusModal({
         type: 'success',
         title: 'Order Accepted! 🚀',

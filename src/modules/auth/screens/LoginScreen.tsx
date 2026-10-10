@@ -164,7 +164,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
           <AuthInput
             label="Email Address *"
             iconName="mail-outline"
-            placeholder="karthik.delivery@example.com"
+            placeholder="Enter email address"
             value={email}
             onChangeText={text => {
               setEmail(text);

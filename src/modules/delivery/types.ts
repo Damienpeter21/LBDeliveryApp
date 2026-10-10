@@ -151,8 +151,11 @@ export interface PendingCashHandoverItem {
   order_id: number;
   order_name: string;
   amount: number;
+  total_amount?: number;
+  reference?: string;
   date: string;
   journal_name?: string;
+  handover_id?: number;
 }
 
 export interface PendingCashHandoverResponse {

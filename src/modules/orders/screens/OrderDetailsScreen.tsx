@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -95,7 +95,37 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
   const [checkingPayment, setCheckingPayment] = useState<boolean>(false);
 
   const pickingId = currentOrder.pickingId || Number(currentOrder.id) || 19;
-  const orderId = Number(currentOrder.id) || pickingId;
+  const saleOrderId =
+    currentOrder.saleOrderId ||
+    Number(currentOrder.origin?.replace(/\D/g, '')) ||
+    pickingId;
+  const targetOrderId = currentOrder.saleOrderId || saleOrderId;
+
+  // Live order details hydration: loads real items, prices, sale order ID, and payment status
+  useEffect(() => {
+    let isMounted = true;
+    const loadLiveDetails = async () => {
+      try {
+        const liveOrder = await OrderService.getOrderDetails(pickingId, currentOrder);
+        if (isMounted && liveOrder) {
+          setCurrentOrder(liveOrder);
+          if (liveOrder.customerName) setSignedBy(liveOrder.customerName);
+          if (liveOrder.totalAmount && liveOrder.totalAmount > 0) {
+            setCashCollectedAmount(String(liveOrder.totalAmount.toFixed(2)));
+          }
+          if (liveOrder.paymentStatus === 'paid') {
+            setIsOnlinePaid(true);
+          }
+        }
+      } catch (err) {
+        console.warn('Could not load live order details:', err);
+      }
+    };
+    loadLiveDetails();
+    return () => {
+      isMounted = false;
+    };
+  }, [pickingId]);
 
   // ── Actions ──────────────────────────────────────────────────────────────
 
@@ -229,14 +259,15 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
   const handleCheckPaymentStatus = async () => {
     setCheckingPayment(true);
     try {
-      const res = await OrderService.checkPaymentStatus(orderId);
+      const res = await OrderService.checkPaymentStatus(targetOrderId);
       const data = res?.result !== undefined ? res.result : res;
-      const statusText = data?.payment_status || data?.status || 'pending';
+      const statusText = data?.payment_state || data?.payment_status || data?.status || 'pending';
+      const isPaid = data?.is_paid || statusText === 'paid' || statusText === 'success';
       const msg =
         data?.message ||
         `Current payment status for order #${currentOrder.orderNumber}: ${statusText.toUpperCase()}`;
 
-      if (statusText === 'paid' || statusText === 'success') {
+      if (isPaid) {
         setIsOnlinePaid(true);
         setCurrentOrder(prev => ({ ...prev, paymentStatus: 'paid' }));
       }
@@ -267,7 +298,7 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
     setActionLoading(true);
     try {
       await OrderService.processRazorpayPayment({
-        order_id: orderId,
+        order_id: targetOrderId,
         journal_id: 6,
         razorpay_payment_id: pId,
         razorpay_order_id: razorpayOrderId.trim() || `order_${Date.now().toString().slice(-8)}`,
@@ -304,7 +335,7 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
     setActionLoading(true);
     try {
       await OrderService.collectCashPhysically({
-        order_id: orderId,
+        order_id: targetOrderId,
         driver_user_id: driverUserId,
         amount_collected: amt,
         journal_id: 7,
@@ -312,6 +343,7 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
       });
       setIsCashCollected(true);
       setShowCodModal(false);
+      setCurrentOrder(prev => ({ ...prev, paymentStatus: 'paid' }));
       showStatusModal({
         type: 'success',
         title: 'Cash Collected',
@@ -343,6 +375,11 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
     }
     if (!signedBy.trim()) {
       setSignedByError('Recipient name is required');
+      return;
+    }
+
+    if (currentOrder.deliveryOtp && otp !== currentOrder.deliveryOtp) {
+      setDeliveryOtpError('Incorrect delivery OTP. Please ask customer for the correct 6-digit code.');
       return;
     }
 
@@ -927,6 +964,13 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
             <Text style={[styles.modalSub, { color: colors.textSecondary }]}>
               Ask the customer for the 6-digit OTP sent to their mobile to confirm package handover.
             </Text>
+            {!!currentOrder.deliveryOtp && (
+              <View style={{ backgroundColor: '#DCFCE7', padding: 8, borderRadius: 8, marginBottom: 8 }}>
+                <Text style={{ fontSize: 11.5, color: '#16A34A', fontWeight: '700' }}>
+                  Expected Customer OTP: {currentOrder.deliveryOtp}
+                </Text>
+              </View>
+            )}
 
             <Text style={[styles.inputLabel, { color: colors.textPrimary }]}>Delivery OTP (6 digits) *</Text>
             <TextInput

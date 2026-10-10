@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
+  Modal,
   RefreshControl,
   StyleSheet,
   Text,
@@ -28,6 +29,8 @@ export const CashHandoverScreen: React.FC<CashHandoverScreenProps> = ({ onBack }
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [actionLoading, setActionLoading] = useState(false);
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [totalPendingCash, setTotalPendingCash] = useState<number>(0);
   const [orders, setOrders] = useState<PendingCashHandoverItem[]>([]);
 
@@ -39,22 +42,38 @@ export const CashHandoverScreen: React.FC<CashHandoverScreenProps> = ({ onBack }
       const res = await DeliveryApiService.getPendingCashHandover(driverUserId);
       const data = res?.result !== undefined ? res.result : res;
       if (data) {
-        const list = Array.isArray(data.pending_handovers)
+        const handovers = Array.isArray(data.pending_handovers)
           ? data.pending_handovers
           : Array.isArray(data.orders)
           ? data.orders
           : [];
-        const total = Number(
-          data.total_pending_cash !== undefined
-            ? data.total_pending_cash
-            : list.reduce(
-                (acc: number, item: any) =>
-                  acc + Number(item.amount || item.amount_collected || item.amount_total || 0),
-                0,
-              ),
-        );
+
+        const orderList: any[] = [];
+        let total = 0;
+
+        for (const ho of handovers) {
+          total += Number(ho.total_amount || ho.amount || ho.amount_collected || 0);
+          const hid = ho.handover_id || ho.id;
+          if (Array.isArray(ho.lines) && ho.lines.length > 0) {
+            for (const line of ho.lines) {
+              orderList.push({
+                ...line,
+                reference: ho.reference,
+                date: ho.date,
+                handover_id: hid,
+              });
+            }
+          } else {
+            orderList.push({ ...ho, handover_id: hid });
+          }
+        }
+
+        if (data.total_pending_cash !== undefined) {
+          total = Number(data.total_pending_cash);
+        }
+
         setTotalPendingCash(total);
-        setOrders(list);
+        setOrders(orderList);
       }
     } catch (err) {
       console.warn('Error fetching cash handover:', err);
@@ -63,6 +82,20 @@ export const CashHandoverScreen: React.FC<CashHandoverScreenProps> = ({ onBack }
       setRefreshing(false);
     }
   }, [driverUserId]);
+
+  const handleConfirmHandover = async () => {
+    setActionLoading(true);
+    try {
+      const hid = orders[0]?.handover_id || 1;
+      await DeliveryApiService.confirmCashHandover(hid);
+      setShowConfirmModal(false);
+      await fetchPendingCash(true);
+    } catch (err: any) {
+      console.warn('Error confirming handover:', err);
+    } finally {
+      setActionLoading(false);
+    }
+  };
 
   useEffect(() => {
     fetchPendingCash();
@@ -139,7 +172,7 @@ export const CashHandoverScreen: React.FC<CashHandoverScreenProps> = ({ onBack }
               <View style={styles.orderCardLeft}>
                 <View style={[styles.orderNumberBadge, { backgroundColor: colors.surfaceVariant }]}>
                   <Text style={[styles.orderNumberText, { color: colors.textPrimary }]}>
-                    #{item.order_name || item.order_id}
+                    #{item.order_name || item.reference || item.order_id || 'COD-ORDER'}
                   </Text>
                 </View>
                 <Text style={[styles.orderDate, { color: colors.textSecondary }]}>
@@ -149,7 +182,7 @@ export const CashHandoverScreen: React.FC<CashHandoverScreenProps> = ({ onBack }
 
               <View style={styles.orderCardRight}>
                 <Text style={[styles.itemAmount, { color: colors.primary }]}>
-                  ₹{(item.amount || 0).toFixed(2)}
+                  ₹{Number(item.amount || item.total_amount || 0).toFixed(2)}
                 </Text>
                 <View style={[styles.statusTag, { backgroundColor: '#FEF3C7' }]}>
                   <Text style={[styles.statusTagText, { color: '#B45309' }]}>Pending Handover</Text>
@@ -171,6 +204,75 @@ export const CashHandoverScreen: React.FC<CashHandoverScreenProps> = ({ onBack }
           }
         />
       )}
+
+      {totalPendingCash > 0 && !loading && (
+        <View
+          style={[
+            styles.bottomActionBar,
+            {
+              backgroundColor: colors.surface,
+              borderTopColor: colors.border,
+              paddingBottom: Math.max(insets.bottom + 12, 16),
+            },
+          ]}
+        >
+          <TouchableOpacity
+            style={[styles.handoverButton, { backgroundColor: colors.primary }]}
+            onPress={() => setShowConfirmModal(true)}
+            disabled={actionLoading}
+            activeOpacity={0.85}
+          >
+            {actionLoading ? (
+              <ActivityIndicator color={colors.onPrimary} size="small" />
+            ) : (
+              <>
+                <Ionicons name="checkmark-done-circle" size={20} color={colors.onPrimary} style={{ marginRight: 8 }} />
+                <Text style={[styles.handoverButtonText, { color: colors.onPrimary }]}>
+                  Hand Over ₹{totalPendingCash.toFixed(2)} to Cashier
+                </Text>
+              </>
+            )}
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* Confirmation Modal */}
+      <Modal visible={showConfirmModal} transparent animationType="fade">
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.modalCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <View style={[styles.modalIconBox, { backgroundColor: '#FEF3C7' }]}>
+              <Ionicons name="wallet-outline" size={32} color="#D97706" />
+            </View>
+            <Text style={[styles.modalTitle, { color: colors.textPrimary }]}>
+              Confirm Cash Handover
+            </Text>
+            <Text style={[styles.modalMessage, { color: colors.textSecondary }]}>
+              Have you handed over ₹{totalPendingCash.toFixed(2)} in physical cash to the hub cashier/accountant?
+            </Text>
+
+            <View style={styles.modalBtnRow}>
+              <TouchableOpacity
+                style={[styles.modalCancelBtn, { borderColor: colors.border }]}
+                onPress={() => setShowConfirmModal(false)}
+                disabled={actionLoading}
+              >
+                <Text style={[styles.modalCancelBtnText, { color: colors.textSecondary }]}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalConfirmBtn, { backgroundColor: colors.primary }]}
+                onPress={handleConfirmHandover}
+                disabled={actionLoading}
+              >
+                {actionLoading ? (
+                  <ActivityIndicator color={colors.onPrimary} size="small" />
+                ) : (
+                  <Text style={[styles.modalConfirmBtnText, { color: colors.onPrimary }]}>Yes, Handed Over</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 };
@@ -271,6 +373,84 @@ const styles = StyleSheet.create({
   },
   statusTagText: {
     fontSize: 10,
+    fontWeight: '800',
+  },
+  bottomActionBar: {
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    borderTopWidth: 1,
+  },
+  handoverButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: 48,
+    borderRadius: 12,
+  },
+  handoverButtonText: {
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  modalCard: {
+    width: '100%',
+    padding: 20,
+    borderRadius: 16,
+    borderWidth: 1,
+    alignItems: 'center',
+  },
+  modalIconBox: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  modalMessage: {
+    fontSize: 13.5,
+    textAlign: 'center',
+    lineHeight: 20,
+    marginBottom: 20,
+  },
+  modalBtnRow: {
+    flexDirection: 'row',
+    gap: 12,
+    width: '100%',
+  },
+  modalCancelBtn: {
+    flex: 1,
+    height: 44,
+    borderWidth: 1,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalCancelBtnText: {
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  modalConfirmBtn: {
+    flex: 1,
+    height: 44,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalConfirmBtnText: {
+    fontSize: 14,
     fontWeight: '800',
   },
 });

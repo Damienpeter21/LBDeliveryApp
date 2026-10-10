@@ -324,53 +324,6 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
           </TouchableOpacity>
         </View>
 
-        {/* Driver Fleet Details Card */}
-        {isAuthenticated && (
-          <View
-            style={[
-              styles.vehicleInfoCard,
-              {
-                backgroundColor: colors.card,
-                borderColor: colors.border,
-                borderRadius: borderRadius.lg,
-              },
-            ]}
-          >
-            <View style={styles.vehicleHeaderRow}>
-              <Ionicons name="shield-checkmark" size={16} color={colors.primary} />
-              <Text style={[styles.vehicleHeaderTitle, { color: colors.textPrimary }]}>
-                Verified Fleet Partner
-              </Text>
-              <View style={[styles.activePill, { backgroundColor: '#DCFCE7' }]}>
-                <Text style={styles.activePillText}>ACTIVE</Text>
-              </View>
-            </View>
-
-            <View style={styles.vehicleGrid}>
-              <View style={styles.vehicleGridItem}>
-                <Text style={[styles.vehicleGridLabel, { color: colors.textSecondary }]}>VEHICLE</Text>
-                <Text style={[styles.vehicleGridVal, { color: colors.textPrimary }]}>
-                  {user?.vehicle_type || 'Scooty'} ({user?.vehicle_number || 'TN70CC7890'})
-                </Text>
-              </View>
-
-              <View style={styles.vehicleGridItem}>
-                <Text style={[styles.vehicleGridLabel, { color: colors.textSecondary }]}>LICENSE #</Text>
-                <Text style={[styles.vehicleGridVal, { color: colors.textPrimary }]}>
-                  {user?.license_number || 'TN7020230007890'}
-                </Text>
-              </View>
-
-              <View style={styles.vehicleGridItem}>
-                <Text style={[styles.vehicleGridLabel, { color: colors.textSecondary }]}>DELIVERY HUB</Text>
-                <Text style={[styles.vehicleGridVal, { color: colors.textPrimary }]}>
-                  {user?.city || 'Hosur, Tamil Nadu'}
-                </Text>
-              </View>
-            </View>
-          </View>
-        )}
-
         {/* Section 1: Account Activities */}
         <Text style={[styles.groupHeader, { color: colors.textSecondary }]}>ACCOUNT & ACTIVITY</Text>
         <View
@@ -410,7 +363,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
 
           {/* Cash Handover */}
           <TouchableOpacity
-            style={[styles.menuItem, { borderBottomColor: colors.divider }]}
+            style={[styles.menuItem, isAuthenticated ? { borderBottomColor: colors.divider } : { borderBottomWidth: 0 }]}
             onPress={onNavigateToWishlist}
             activeOpacity={0.7}
           >
@@ -431,7 +384,76 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
             </View>
           </TouchableOpacity>
 
-          {/* Delivery Addresses */}
+          {/* Verified Fleet Partner (Integrated into Account & Activity) */}
+          {isAuthenticated && (
+            <View style={styles.fleetPartnerSection}>
+              <View style={styles.fleetHeaderItem}>
+                <View style={styles.menuLeft}>
+                  <View style={[styles.iconBox, { backgroundColor: '#DCFCE7' }]}>
+                    <Ionicons name="shield-checkmark" size={18} color="#16A34A" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                      <Text style={[styles.menuTitle, { color: colors.textPrimary }]}>Verified Fleet Partner</Text>
+                      <View style={[styles.activePill, { backgroundColor: '#DCFCE7', marginLeft: 8 }]}>
+                        <Text style={styles.activePillText}>ACTIVE</Text>
+                      </View>
+                    </View>
+                    <Text style={[styles.menuSub, { color: colors.textSecondary }]}>
+                      Official vehicle & license credentials
+                    </Text>
+                  </View>
+                </View>
+              </View>
+
+              {/* Fleet Spec Grid */}
+              <View
+                style={[
+                  styles.fleetSpecContainer,
+                  {
+                    backgroundColor: isDark ? colors.surfaceVariant : '#F8FAFC',
+                    borderColor: colors.border,
+                  },
+                ]}
+              >
+                <View style={styles.fleetSpecItem}>
+                  <View style={styles.fleetSpecTitleRow}>
+                    <Ionicons name="bicycle-outline" size={12} color={colors.primary} style={{ marginRight: 4 }} />
+                    <Text style={[styles.fleetSpecLabel, { color: colors.textSecondary }]}>VEHICLE</Text>
+                  </View>
+                  <Text style={[styles.fleetSpecVal, { color: colors.textPrimary }]} numberOfLines={1}>
+                    {user?.vehicle_type || 'Scooty'} ({user?.vehicle_number || 'TN70CC7890'})
+                  </Text>
+                </View>
+
+                <View style={[styles.fleetSpecDivider, { backgroundColor: colors.border }]} />
+
+                <View style={styles.fleetSpecItem}>
+                  <View style={styles.fleetSpecTitleRow}>
+                    <Ionicons name="card-outline" size={12} color="#0284C7" style={{ marginRight: 4 }} />
+                    <Text style={[styles.fleetSpecLabel, { color: colors.textSecondary }]}>LICENSE #</Text>
+                  </View>
+                  <Text style={[styles.fleetSpecVal, { color: colors.textPrimary }]} numberOfLines={1}>
+                    {user?.license_number || 'TN7020230007890'}
+                  </Text>
+                </View>
+
+                <View style={[styles.fleetSpecDivider, { backgroundColor: colors.border }]} />
+
+                <View style={styles.fleetSpecItem}>
+                  <View style={styles.fleetSpecTitleRow}>
+                    <Ionicons name="location-outline" size={12} color="#D97706" style={{ marginRight: 4 }} />
+                    <Text style={[styles.fleetSpecLabel, { color: colors.textSecondary }]}>HUB</Text>
+                  </View>
+                  <Text style={[styles.fleetSpecVal, { color: colors.textPrimary }]} numberOfLines={1}>
+                    {user?.city || 'Hosur, Tamil Nadu'}
+                  </Text>
+                </View>
+              </View>
+            </View>
+          )}
+
+          {/* Delivery Addresses (commented out)
           <TouchableOpacity
             style={styles.menuItem}
             onPress={() => (isAuthenticated ? onNavigateToSavedAddresses() : onNavigateToLogin())}
@@ -464,6 +486,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
               <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />
             </View>
           </TouchableOpacity>
+          */}
         </View>
 
         {/* Section 2: Preferences & Support */}
@@ -500,7 +523,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
             </TouchableOpacity>
           )}
 
-          <View style={[styles.menuItem, { borderBottomColor: colors.divider }]}>
+          <View style={[styles.menuItem, { borderBottomWidth: 0 }]}>
             <View style={styles.menuLeft}>
               <View style={[styles.iconBox, { backgroundColor: colors.surfaceVariant }]}>
                 <Ionicons name={isDark ? 'moon' : 'sunny'} size={18} color={colors.primary} />
@@ -520,6 +543,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
             />
           </View>
 
+          {/* Terms & Conditions (commented out)
           <TouchableOpacity
             style={styles.menuItem}
             onPress={() => {
@@ -542,6 +566,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
             </View>
             <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />
           </TouchableOpacity>
+          */}
         </View>
 
         {/* Log Out Action */}
@@ -811,27 +836,44 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '800',
   },
-  vehicleInfoCard: {
-    padding: 14,
-    borderWidth: 1,
-    marginBottom: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.04,
-    shadowRadius: 4,
-    elevation: 2,
+  fleetPartnerSection: {
+    paddingVertical: 12,
+    paddingHorizontal: 14,
   },
-  vehicleHeaderRow: {
+  fleetHeaderItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 12,
+    marginBottom: 10,
   },
-  vehicleHeaderTitle: {
-    fontSize: 13,
-    fontWeight: '800',
-    marginLeft: 6,
+  fleetSpecContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+  },
+  fleetSpecItem: {
     flex: 1,
-    letterSpacing: 0.2,
+  },
+  fleetSpecTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 3,
+  },
+  fleetSpecLabel: {
+    fontSize: 9.5,
+    fontWeight: '800',
+    letterSpacing: 0.4,
+  },
+  fleetSpecVal: {
+    fontSize: 11.5,
+    fontWeight: '700',
+  },
+  fleetSpecDivider: {
+    width: 1,
+    height: 24,
+    marginHorizontal: 8,
   },
   activePill: {
     paddingHorizontal: 8,
@@ -843,25 +885,5 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     color: '#16A34A',
     letterSpacing: 0.5,
-  },
-  vehicleGrid: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: '#f0f0f0',
-  },
-  vehicleGridItem: {
-    flex: 1,
-  },
-  vehicleGridLabel: {
-    fontSize: 9.5,
-    fontWeight: '800',
-    letterSpacing: 0.5,
-    marginBottom: 2,
-  },
-  vehicleGridVal: {
-    fontSize: 11.5,
-    fontWeight: '700',
   },
 });

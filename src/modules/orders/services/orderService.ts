@@ -1,4 +1,5 @@
 // src/modules/orders/services/orderService.ts
+import { callOdooRpc } from '../../../app/config';
 import { DeliveryApiService } from '../../delivery/services/deliveryApiService';
 import {
   CodReconciliationPayload,
@@ -49,7 +50,45 @@ export class OrderService {
     try {
       const res = await DeliveryApiService.getMyDeliveries(driverUserId, statusFilter);
       const list = extractPickingsArray(res);
-      return list.map(mapDeliveryPickingToOrder);
+      const orders = list.map(mapDeliveryPickingToOrder);
+
+      // Merge any pickings assigned to this driver directly from Odoo stock.picking
+      // to ensure pickings accepted across different dates are never missed
+      try {
+        const rpcRes: any = await callOdooRpc(
+          'stock.picking',
+          'search_read',
+          [[['delivery_driver_id', '=', Number(driverUserId)]]],
+          {
+            fields: [
+              'id',
+              'name',
+              'origin',
+              'state',
+              'scheduled_date',
+              'delivery_app_status',
+              'delivery_driver_id',
+              'partner_id',
+              'delivery_otp',
+              'date_done',
+            ],
+            limit: 50,
+          },
+        );
+        const rpcList = Array.isArray(rpcRes) ? rpcRes : rpcRes?.result;
+        if (Array.isArray(rpcList) && rpcList.length > 0) {
+          const existingIds = new Set(orders.map(o => o.pickingId || Number(o.id)));
+          for (const item of rpcList) {
+            const pId = Number(item.id);
+            if (!existingIds.has(pId)) {
+              orders.push(mapDeliveryPickingToOrder(item));
+              existingIds.add(pId);
+            }
+          }
+        }
+      } catch (_) {}
+
+      return orders;
     } catch (error) {
       console.warn('Error fetching my deliveries:', error);
       return [];
@@ -64,14 +103,7 @@ export class OrderService {
     driverUserId: number,
     statusFilter: string | null = null,
   ): Promise<Order[]> {
-    try {
-      const res = await DeliveryApiService.getTodayDeliveries(driverUserId, statusFilter);
-      const list = extractPickingsArray(res);
-      return list.map(mapDeliveryPickingToOrder);
-    } catch (error) {
-      console.warn('Error fetching today deliveries:', error);
-      return [];
-    }
+    return this.getMyDeliveries(driverUserId, statusFilter);
   }
 
   /**
@@ -205,6 +237,180 @@ export class OrderService {
     statusFilter: string | null = null,
   ): Promise<PendingCashHandoverResponse | any> {
     return DeliveryApiService.getPendingCashHandover(driverUserId, statusFilter);
+  }
+
+  /**
+   * Fetches full live order details from Odoo including line items and sale order info
+   */
+  static async getOrderDetails(pickingId: number, baseOrder?: Order): Promise<Order> {
+    try {
+      const pRes: any = await callOdooRpc(
+        'stock.picking',
+        'read',
+        [[Number(pickingId)]],
+        {
+          fields: [
+            'id',
+            'name',
+            'origin',
+            'state',
+            'scheduled_date',
+            'delivery_app_status',
+            'delivery_driver_id',
+            'partner_id',
+            'delivery_otp',
+            'sale_id',
+          ],
+        },
+      );
+
+      const picking = Array.isArray(pRes) ? pRes[0] : (pRes?.result ? pRes.result[0] : null);
+      if (!picking) {
+        return baseOrder || mapDeliveryPickingToOrder({ id: pickingId });
+      }
+
+      const saleId = picking.sale_id
+        ? Array.isArray(picking.sale_id)
+          ? picking.sale_id[0]
+          : picking.sale_id
+        : undefined;
+
+      let saleOrder: any = null;
+      let orderLines: any[] = [];
+
+      if (saleId) {
+        try {
+          const soRes: any = await callOdooRpc(
+            'sale.order',
+            'read',
+            [[Number(saleId)]],
+            {
+              fields: [
+                'id',
+                'name',
+                'amount_total',
+                'order_line',
+                'delivery_status',
+                'invoice_status',
+                'partner_id',
+              ],
+            },
+          );
+          saleOrder = Array.isArray(soRes) ? soRes[0] : (soRes?.result ? soRes.result[0] : null);
+
+          if (saleOrder && Array.isArray(saleOrder.order_line) && saleOrder.order_line.length > 0) {
+            const lineRes: any = await callOdooRpc(
+              'sale.order.line',
+              'read',
+              [saleOrder.order_line],
+              {
+                fields: [
+                  'id',
+                  'product_id',
+                  'product_uom_qty',
+                  'price_unit',
+                  'price_total',
+                  'product_uom',
+                ],
+              },
+            );
+            orderLines = Array.isArray(lineRes) ? lineRes : (lineRes?.result ? lineRes.result : []);
+          }
+        } catch (_) {}
+      }
+
+      let customerPartner: any = null;
+      const partnerId = picking.partner_id
+        ? Array.isArray(picking.partner_id)
+          ? picking.partner_id[0]
+          : picking.partner_id
+        : undefined;
+
+      if (partnerId) {
+        try {
+          const cpRes: any = await callOdooRpc(
+            'res.partner',
+            'read',
+            [[Number(partnerId)]],
+            { fields: ['id', 'name', 'phone', 'street', 'city', 'zip'] },
+          );
+          customerPartner = Array.isArray(cpRes) ? cpRes[0] : (cpRes?.result ? cpRes.result[0] : null);
+        } catch (_) {}
+      }
+
+      // Check live payment status if saleId exists
+      let paymentStatus = baseOrder?.paymentStatus || 'pending';
+      let isPaid = false;
+      if (saleId) {
+        try {
+          const payRes = await DeliveryApiService.checkPaymentStatus(Number(saleId));
+          const pData = payRes?.result !== undefined ? payRes.result : payRes;
+          if (pData?.is_paid || pData?.payment_state === 'paid' || pData?.payment_status === 'paid') {
+            isPaid = true;
+            paymentStatus = 'paid';
+          }
+        } catch (_) {}
+      }
+
+      const totalAmount = Number(
+        saleOrder?.amount_total ||
+          baseOrder?.totalAmount ||
+          orderLines.reduce(
+            (sum, l) => sum + Number(l.price_total || l.price_unit * l.product_uom_qty || 0),
+            0,
+          ) ||
+          0,
+      );
+
+      const items = orderLines.map((l: any, idx: number) => {
+        const pName = Array.isArray(l.product_id) ? l.product_id[1] : (l.name || `Item #${idx + 1}`);
+        const pPrice = Number(l.price_unit || 0);
+        const pQty = Number(l.product_uom_qty || 1);
+        const pUnit = Array.isArray(l.product_uom) ? l.product_uom[1] : 'Units';
+        return {
+          id: l.id || idx,
+          productName: pName,
+          quantity: pQty,
+          price: pPrice,
+          product: {
+            id: Array.isArray(l.product_id) ? l.product_id[0] : idx,
+            name: pName,
+            price: pPrice,
+            unit: pUnit,
+          },
+        };
+      });
+
+      const mappedOrder = mapDeliveryPickingToOrder({
+        ...baseOrder,
+        ...picking,
+        picking_id: pickingId,
+        sale_order_id: saleId,
+        amount_total: totalAmount,
+        customer_name:
+          customerPartner?.name ||
+          (Array.isArray(picking.partner_id) ? picking.partner_id[1] : undefined) ||
+          baseOrder?.customerName,
+        customer_phone: customerPartner?.phone || baseOrder?.customerPhone,
+        customer_address:
+          [customerPartner?.street, customerPartner?.city, customerPartner?.zip]
+            .filter(Boolean)
+            .join(', ') || baseOrder?.deliveryAddress,
+      });
+
+      return {
+        ...mappedOrder,
+        saleOrderId: saleId ? Number(saleId) : baseOrder?.saleOrderId,
+        totalAmount: totalAmount || mappedOrder.totalAmount,
+        items: items.length > 0 ? items : (baseOrder?.items || mappedOrder.items),
+        itemCount: items.length > 0 ? items.length : (baseOrder?.itemCount || mappedOrder.itemCount),
+        paymentStatus,
+        isCod: baseOrder?.isCod ?? !isPaid,
+      };
+    } catch (err) {
+      console.warn('Error fetching live order details:', err);
+      return baseOrder || mapDeliveryPickingToOrder({ id: pickingId });
+    }
   }
 
   /**

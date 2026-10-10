@@ -8,6 +8,7 @@ import {
 } from '../../delivery/types';
 import { Order } from '../../orders/types';
 import { mapDeliveryPickingToOrder } from '../../orders/utils/orderMapper';
+import { OrderService } from '../../orders/services/orderService';
 
 const extractPickingsArray = (res: any): any[] => {
   if (!res) return [];
@@ -44,12 +45,9 @@ export class HomeActions {
    */
   static async getMyActiveDeliveries(driverUserId: number): Promise<Order[]> {
     try {
-      const res = await DeliveryApiService.getMyDeliveries(driverUserId);
-      const list = extractPickingsArray(res);
-      const orders = list.map(mapDeliveryPickingToOrder);
+      const orders = await OrderService.getMyDeliveries(driverUserId);
       return orders.filter((o: Order) => o.status !== 'delivered' && o.status !== 'cancelled');
     } catch (error) {
-
       console.warn('HomeActions.getMyActiveDeliveries error:', error);
       return [];
     }
@@ -107,7 +105,7 @@ export class HomeActions {
       const total = Number(
         data.total_pending_cash !== undefined
           ? data.total_pending_cash
-          : handovers.reduce((acc: number, item: any) => acc + Number(item.amount || 0), 0),
+          : handovers.reduce((acc: number, item: any) => acc + Number(item.total_amount || item.amount || 0), 0),
       );
 
       return {

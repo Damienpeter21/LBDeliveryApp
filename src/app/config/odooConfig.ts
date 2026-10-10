@@ -66,6 +66,30 @@ export async function callOdooRpc<T = any>(
     });
 
     if (response.data?.error) {
+      // Try authenticated session dataset fallback
+      try {
+        const sessionRes = await axiosInstance({
+          method: 'POST',
+          url: '/web/dataset/call_kw',
+          headers: ODOO_DEFAULT_HEADERS,
+          skipGlobalErrorToast: true,
+          data: {
+            jsonrpc: '2.0',
+            method: 'call',
+            params: {
+              model,
+              method,
+              args,
+              kwargs,
+            },
+            id: ++rpcCounter,
+          },
+        });
+        if (sessionRes.data?.result !== undefined) {
+          return sessionRes.data;
+        }
+      } catch (_) {}
+
       const err = response.data.error;
       const message =
         err.data?.message ||
@@ -77,6 +101,30 @@ export async function callOdooRpc<T = any>(
 
     return response.data;
   } catch (error) {
+    // Try authenticated session dataset fallback
+    try {
+      const sessionRes = await axiosInstance({
+        method: 'POST',
+        url: '/web/dataset/call_kw',
+        headers: ODOO_DEFAULT_HEADERS,
+        skipGlobalErrorToast: true,
+        data: {
+          jsonrpc: '2.0',
+          method: 'call',
+          params: {
+            model,
+            method,
+            args,
+            kwargs,
+          },
+          id: ++rpcCounter,
+        },
+      });
+      if (sessionRes.data?.result !== undefined) {
+        return sessionRes.data;
+      }
+    } catch (_) {}
+
     console.warn(`[Odoo RPC Note] (${model}.${method}):`, (error as any)?.message || error);
     throw error;
   }

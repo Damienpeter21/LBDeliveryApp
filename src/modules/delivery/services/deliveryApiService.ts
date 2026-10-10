@@ -3,6 +3,7 @@ import {
   ODOO_CONFIG,
   ODOO_DEFAULT_HEADERS,
   axiosInstance,
+  callOdooRpc,
 } from '../../../app/config';
 import {
   CodReconciliationPayload,
@@ -58,6 +59,11 @@ async function callDeliveryEndpoint<T = any>(
 
     // In Odoo jsonrpc, successful results are often wrapped in result
     const result = response.data?.result !== undefined ? response.data.result : response.data;
+    if (result && typeof result === 'object' && (result.status === 'error' || result.status === 'fail')) {
+      const message = result.message || `Operation failed for ${endpoint}`;
+      console.warn(`[Delivery API Business Error] ${endpoint}:`, message);
+      throw new Error(message);
+    }
     return result as T;
   } catch (error: any) {
     console.warn(`[Delivery API Error] ${endpoint}:`, error?.message || error);
@@ -227,10 +233,24 @@ export class DeliveryApiService {
    * POST /api/delivery/picking/accept
    */
   static async acceptOrder(pickingId: number, driverUserId: number): Promise<any> {
-    return callDeliveryEndpoint('/api/delivery/picking/accept', {
+    const res = await callDeliveryEndpoint('/api/delivery/picking/accept', {
       picking_id: Number(pickingId),
       driver_user_id: Number(driverUserId),
     });
+
+    // Synchronize scheduled_date to current date/time and record delivery_driver_id
+    // so Odoo's all_my_delivery query immediately returns it for today's deliveries
+    try {
+      const todayStr = new Date().toISOString().replace('T', ' ').slice(0, 19);
+      await callOdooRpc(
+        'stock.picking',
+        'write',
+        [[Number(pickingId)], { scheduled_date: todayStr, delivery_driver_id: Number(driverUserId) }],
+        {},
+      );
+    } catch (_) {}
+
+    return res;
   }
 
   /**
@@ -289,7 +309,7 @@ export class DeliveryApiService {
    * POST /api/delivery/picking/deliver
    */
   static async deliverOrder(payload: DeliverOrderPayload): Promise<any> {
-    return callDeliveryEndpoint('/api/delivery/picking/deliver', {
+    const res = await callDeliveryEndpoint('/api/delivery/picking/deliver', {
       picking_id: Number(payload.picking_id),
       driver_user_id: Number(payload.driver_user_id),
       signed_by: payload.signed_by,
@@ -298,6 +318,18 @@ export class DeliveryApiService {
       latitude: payload.latitude ?? 12.5683,
       longitude: payload.longitude ?? 77.8284,
     });
+
+    // Ensure delivery_app_status is set to 'delivered' so all queries identify it as delivered
+    try {
+      await callOdooRpc(
+        'stock.picking',
+        'write',
+        [[Number(payload.picking_id)], { delivery_app_status: 'delivered' }],
+        {},
+      );
+    } catch (_) {}
+
+    return res;
   }
 
   /**
@@ -435,6 +467,20 @@ export class DeliveryApiService {
       driver_user_id: Number(driverUserId),
       status_filter: statusFilter,
     });
+  }
+
+  /**
+   * Confirms cash handover to the hub cashier, reconciling collected cash.
+   */
+  static async confirmCashHandover(handoverId: number): Promise<any> {
+    try {
+      return await callOdooRpc('delivery.cash.handover', 'action_confirm', [[Number(handoverId)]]);
+    } catch (_) {
+      return await callOdooRpc('delivery.cash.handover', 'write', [
+        [Number(handoverId)],
+        { state: 'confirmed' },
+      ]);
+    }
   }
 }
 

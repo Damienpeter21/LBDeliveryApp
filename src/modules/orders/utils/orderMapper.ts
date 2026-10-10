@@ -14,11 +14,12 @@ export const mapOdooStateToOrderStatus = (
   const normalizedDelivery =
     typeof deliveryStatus === 'string' ? deliveryStatus.toLowerCase() : '';
 
-  if (normalizedState === 'cancel' || normalizedDelivery === 'cancel' || normalizedDelivery === 'cancelled') {
+  if (normalizedState === 'cancel' || normalizedDelivery === 'cancel' || normalizedDelivery === 'cancelled' || normalizedDelivery === 'failed') {
     return 'cancelled';
   }
 
-  if (normalizedDelivery === 'delivered' || normalizedDelivery === 'full' || normalizedState === 'done') {
+  // 1. Explicit delivery partner app stages have highest priority
+  if (normalizedDelivery === 'delivered' || normalizedDelivery === 'full') {
     return 'delivered';
   }
 
@@ -34,11 +35,24 @@ export const mapOdooStateToOrderStatus = (
     return 'arrived_store';
   }
 
-  if (driverId && (normalizedDelivery === 'assigned' || normalizedDelivery === 'accepted')) {
+  if (normalizedDelivery === 'assigned' || normalizedDelivery === 'accepted') {
     return 'assigned';
   }
 
-  if (!driverId || normalizedDelivery === 'unassigned' || normalizedState === 'draft' || normalizedState === 'waiting' || normalizedState === 'assigned') {
+  if (normalizedDelivery === 'unassigned') {
+    return 'unassigned';
+  }
+
+  // 2. Fallbacks based on Odoo stock.picking state if delivery_app_status is absent
+  if (normalizedState === 'done') {
+    return 'delivered';
+  }
+
+  if (normalizedState === 'draft' || normalizedState === 'waiting') {
+    return 'unassigned';
+  }
+
+  if (!driverId && normalizedState === 'assigned') {
     return 'unassigned';
   }
 
@@ -70,7 +84,11 @@ export const mapDeliveryPickingToOrder = (
 
   const pickingId = Number(raw.picking_id || raw.id || 0);
   const id = String(pickingId || raw.order_id || '0');
-  const orderNumber = raw.name || raw.picking_name || (raw.origin ? `#${raw.origin}` : `#ORD-${id}`);
+  const orderNumber =
+    raw.name ||
+    raw.picking_name ||
+    raw.picking_reference ||
+    (raw.origin ? `#${raw.origin}` : `#ORD-${id}`);
 
   // Format date/time
   let date = 'Today';
@@ -115,10 +133,15 @@ export const mapDeliveryPickingToOrder = (
   }
 
   // Determine stage / status
-  const driverId = raw.driver_user_id || raw.driver_id;
+  const driverId =
+    raw.driver_user_id ||
+    raw.driver_id ||
+    raw.delivery_driver_id ||
+    (raw.picking_reference ? 1 : undefined);
+
   const status = resolvedDefaultStatus || mapOdooStateToOrderStatus(
-    raw.state,
-    raw.delivery_state || raw.delivery_status || raw.stage,
+    raw.state || raw.picking_state,
+    raw.delivery_app_status || raw.delivery_state || raw.delivery_status || raw.stage,
     driverId,
   );
 
@@ -175,6 +198,7 @@ export const mapDeliveryPickingToOrder = (
 
   const deliveryAddress =
     raw.delivery_address ||
+    raw.customer_address ||
     raw.street ||
     [raw.street, raw.city, raw.zip_code].filter(Boolean).join(', ') ||
     'Hosur, Tamil Nadu';
@@ -186,6 +210,13 @@ export const mapDeliveryPickingToOrder = (
   return {
     id,
     pickingId,
+    saleOrderId: raw.sale_order_id
+      ? Number(raw.sale_order_id)
+      : Array.isArray(raw.sale_id)
+      ? Number(raw.sale_id[0])
+      : raw.sale_id
+      ? Number(raw.sale_id)
+      : undefined,
     orderNumber,
     origin: raw.origin || undefined,
     date,
@@ -204,6 +235,7 @@ export const mapDeliveryPickingToOrder = (
     storeName: raw.store_name || 'LB Delivery Central Hub',
     storeAddress: raw.store_address || 'Mathigiri Main Road, Hosur',
     eta: raw.eta || '15-20 mins',
+    deliveryOtp: raw.delivery_otp ? String(raw.delivery_otp) : undefined,
     cancelReason: raw.cancel_reason,
     latitude: raw.latitude,
     longitude: raw.longitude,

@@ -92,6 +92,16 @@ export const useOrders = () => {
   const acceptOrder = async (pickingId: number): Promise<boolean> => {
     try {
       await OrderService.acceptOrder(pickingId, driverUserId);
+      setAvailableOrders(prev => {
+        const found = prev.find(o => (o.pickingId || Number(o.id)) === pickingId);
+        if (found) {
+          setMyDeliveries(myDels => [
+            { ...found, status: 'assigned' },
+            ...myDels.filter(o => (o.pickingId || Number(o.id)) !== pickingId),
+          ]);
+        }
+        return prev.filter(o => (o.pickingId || Number(o.id)) !== pickingId);
+      });
       await fetchOrders(true);
       return true;
     } catch (err: any) {
@@ -150,6 +160,10 @@ export const useOrders = () => {
         ...payload,
         driver_user_id: driverUserId,
       });
+      const pId = Number(payload.picking_id);
+      setMyDeliveries(prev =>
+        prev.map(o => ((o.pickingId || Number(o.id)) === pId ? { ...o, status: 'delivered' } : o)),
+      );
       await fetchOrders(true);
       return true;
     } catch (err: any) {

@@ -1,5 +1,5 @@
 // src/modules/profile/context/AddressContext.tsx
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { storage } from '../../../storage/AsyncStorage';
 import { useAuth } from '../../auth';
 import { CustomerService } from '../services/customerService';
@@ -35,7 +35,7 @@ export const AddressProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [selectedAddressId, setSelectedAddressId] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
 
-  const fetchAddresses = async (orderId?: number | string | null) => {
+  const fetchAddresses = useCallback(async (orderId?: number | string | null) => {
     if (!isAuthenticated || !partnerId) {
       setAddresses([]);
       setSelectedAddressId('');
@@ -77,7 +77,7 @@ export const AddressProvider: React.FC<{ children: React.ReactNode }> = ({ child
     } finally {
       setLoading(false);
     }
-  };
+  }, [isAuthenticated, partnerId]);
 
   useEffect(() => {
     let isMounted = true;

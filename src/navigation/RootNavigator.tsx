@@ -117,7 +117,9 @@ export const RootNavigator: React.FC = () => {
                 props.navigation.replace('Auth', { screen: 'Login' })
               }
               onNavigateToOrders={() => props.navigation.navigate('Orders')}
-              onNavigateToSavedAddresses={() => {}}
+              onNavigateToSavedAddresses={() =>
+                props.navigation.navigate('AddressList')
+              }
               onNavigateToWishlist={() => props.navigation.navigate('CashHandover')}
               onNavigateToEditProfile={() =>
                 props.navigation.navigate('EditProfile')

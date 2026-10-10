@@ -199,6 +199,8 @@ export const useOrders = () => {
     }
   };
 
+  const refreshOrders = useCallback(() => fetchOrders(true), [fetchOrders]);
+
   return {
     orders: displayedOrders,
     availableOrders,
@@ -211,7 +213,7 @@ export const useOrders = () => {
     loading,
     refreshing,
     error,
-    refreshOrders: () => fetchOrders(true),
+    refreshOrders,
     acceptOrder,
     rejectOrder,
     arrivedAtStore,

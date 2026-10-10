@@ -408,24 +408,24 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
             </View>
           </TouchableOpacity>
 
-          {/* My Wishlist */}
+          {/* Cash Handover */}
           <TouchableOpacity
             style={[styles.menuItem, { borderBottomColor: colors.divider }]}
             onPress={onNavigateToWishlist}
             activeOpacity={0.7}
           >
             <View style={styles.menuLeft}>
-              <View style={[styles.iconBox, { backgroundColor: colors.surfaceVariant }]}>
-                <Ionicons name="heart-outline" size={18} color={colors.error} />
+              <View style={[styles.iconBox, { backgroundColor: '#FEF3C7' }]}>
+                <Ionicons name="wallet-outline" size={18} color="#D97706" />
               </View>
               <View>
-                <Text style={[styles.menuTitle, { color: colors.textPrimary }]}>My Wishlist</Text>
-                <Text style={[styles.menuSub, { color: colors.textSecondary }]}>Saved favorite fresh items</Text>
+                <Text style={[styles.menuTitle, { color: colors.textPrimary }]}>Cash Handover</Text>
+                <Text style={[styles.menuSub, { color: colors.textSecondary }]}>Reconcile collected COD cash & receipts</Text>
               </View>
             </View>
             <View style={styles.menuRight}>
-              <View style={[styles.countBadge, { backgroundColor: colors.surfaceVariant }]}>
-                <Text style={[styles.countBadgeText, { color: colors.error }]}>{wishlistCount}</Text>
+              <View style={[styles.countBadge, { backgroundColor: '#FEF3C7' }]}>
+                <Text style={[styles.countBadgeText, { color: '#D97706' }]}>COD</Text>
               </View>
               <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />
             </View>

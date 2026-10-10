@@ -129,6 +129,8 @@ export const mapDeliveryPickingToOrder = (
     ? raw.order_line
     : Array.isArray(raw.move_lines)
     ? raw.move_lines
+    : Array.isArray(raw.lines)
+    ? raw.lines
     : [];
 
   const items: OrderItem[] = rawItems.map((it: any, index: number) => {

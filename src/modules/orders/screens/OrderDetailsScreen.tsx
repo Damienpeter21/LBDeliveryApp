@@ -624,7 +624,11 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
           <View style={styles.billingRow}>
             <Text style={[styles.billingLabel, { color: colors.textSecondary }]}>Order Total:</Text>
             <Text style={[styles.billingValueTotal, { color: colors.primary }]}>
-              ₹{currentOrder.totalAmount.toFixed(2)}
+              {currentOrder.totalAmount > 0
+                ? `₹${currentOrder.totalAmount.toFixed(2)}`
+                : !currentOrder.isCod
+                ? 'Prepaid (Paid Online)'
+                : '₹0.00'}
             </Text>
           </View>
 

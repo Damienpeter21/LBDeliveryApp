@@ -434,7 +434,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
               </TouchableOpacity>
             </View>
 
-            {activeDeliveries.slice(0, 2).map(order => (
+            {activeDeliveries.map(order => (
               <OrderCard
                 key={order.id}
                 order={order}
@@ -478,7 +478,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
               </Text>
             </View>
           ) : (
-            unassignedOrders.slice(0, 4).map(order => (
+            unassignedOrders.map(order => (
               <OrderCard
                 key={order.id}
                 order={order}

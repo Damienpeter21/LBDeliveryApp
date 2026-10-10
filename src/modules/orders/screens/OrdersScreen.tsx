@@ -2,6 +2,7 @@ import React, { useCallback, useMemo, useState } from 'react';
 import {
   FlatList,
   RefreshControl,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -116,61 +117,80 @@ export const OrdersScreen: React.FC<OrdersScreenProps> = ({
           style={[
             styles.searchBar,
             {
-              backgroundColor: colors.surfaceVariant,
+              backgroundColor: isDark ? colors.surfaceVariant : '#F8FAFC',
               borderColor: colors.border,
-              borderRadius: borderRadius.lg,
+              borderRadius: 12,
             },
           ]}
         >
           <Ionicons
             name="search-outline"
             size={18}
-            color={colors.textSecondary}
+            color={colors.primary}
             style={styles.searchIcon}
           />
           <TextInput
             value={searchQuery}
             onChangeText={setSearchQuery}
             placeholder="Search order #, customer name, address..."
-            placeholderTextColor={colors.textSecondary}
+            placeholderTextColor={colors.textTertiary}
             style={[styles.searchInput, { color: colors.textPrimary }]}
             returnKeyType="search"
             clearButtonMode="while-editing"
           />
           {searchQuery.length > 0 && (
-            <TouchableOpacity onPress={() => setSearchQuery('')}>
-              <Ionicons name="close-circle" size={16} color={colors.textSecondary} />
+            <TouchableOpacity onPress={() => setSearchQuery('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <Ionicons name="close-circle" size={17} color={colors.textSecondary} />
             </TouchableOpacity>
           )}
         </View>
       </View>
 
-      {/* Delivery Stage Tabs */}
-      <View style={[styles.tabBar, { borderBottomColor: colors.border }]}>
-        {tabs.map(tab => {
-          const isSelected = selectedTab === tab.id;
-          return (
-            <TouchableOpacity
-              key={tab.id}
-              activeOpacity={0.7}
-              onPress={() => setSelectedTab(tab.id)}
-              style={[
-                styles.tabItem,
-                isSelected && [styles.activeTabItem, { borderBottomColor: colors.primary }],
-              ]}
-            >
-              <View style={styles.tabContentRow}>
+      {/* Modern Capsule Pill Delivery Tabs */}
+      <View style={[styles.tabBarWrapper, { backgroundColor: colors.surface, borderBottomColor: colors.border }]}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.tabScrollContent}
+        >
+          {tabs.map(tab => {
+            const isSelected = selectedTab === tab.id;
+            return (
+              <TouchableOpacity
+                key={tab.id}
+                activeOpacity={0.75}
+                onPress={() => setSelectedTab(tab.id)}
+                style={[
+                  styles.tabPill,
+                  {
+                    backgroundColor: isSelected
+                      ? isDark
+                        ? 'rgba(22, 163, 74, 0.22)'
+                        : '#DCFCE7'
+                      : isDark
+                      ? colors.surfaceVariant
+                      : '#F1F5F9',
+                    borderColor: isSelected
+                      ? colors.primary
+                      : isDark
+                      ? colors.border
+                      : '#E2E8F0',
+                  },
+                ]}
+              >
                 <Ionicons
                   name={tab.icon}
-                  size={14}
+                  size={15}
                   color={isSelected ? colors.primary : colors.textSecondary}
-                  style={{ marginRight: 4 }}
+                  style={styles.tabIcon}
                 />
                 <Text
                   style={[
                     styles.tabLabel,
-                    { color: isSelected ? colors.primary : colors.textSecondary },
-                    isSelected && styles.activeTabLabel,
+                    {
+                      color: isSelected ? colors.primary : colors.textSecondary,
+                      fontWeight: isSelected ? '800' : '600',
+                    },
                   ]}
                 >
                   {tab.label}
@@ -179,23 +199,44 @@ export const OrdersScreen: React.FC<OrdersScreenProps> = ({
                   style={[
                     styles.tabBadge,
                     {
-                      backgroundColor: isSelected ? colors.primary : colors.surfaceVariant,
+                      backgroundColor: isSelected
+                        ? colors.primary
+                        : isDark
+                        ? 'rgba(255,255,255,0.08)'
+                        : '#E2E8F0',
                     },
                   ]}
                 >
                   <Text
                     style={[
                       styles.tabBadgeText,
-                      { color: isSelected ? colors.onPrimary : colors.textSecondary },
+                      {
+                        color: isSelected ? '#FFFFFF' : colors.textSecondary,
+                      },
                     ]}
                   >
                     {tab.count}
                   </Text>
                 </View>
-              </View>
-            </TouchableOpacity>
-          );
-        })}
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+      </View>
+
+      {/* Tab Context / Result Summary Header */}
+      <View style={[styles.summaryRow, { backgroundColor: colors.background }]}>
+        <Text style={[styles.summaryCountText, { color: colors.textSecondary }]}>
+          {searchQuery.trim()
+            ? `Matching "${searchQuery}" (${displayedOrders.length})`
+            : `${tabs.find(t => t.id === selectedTab)?.label || 'Orders'} (${displayedOrders.length})`}
+        </Text>
+        {selectedTab === 'available' && displayedOrders.length > 0 && (
+          <View style={[styles.hintPill, { backgroundColor: isDark ? 'rgba(202, 138, 4, 0.15)' : '#FEF9C3' }]}>
+            <Ionicons name="flash" size={11} color="#CA8A04" style={{ marginRight: 3 }} />
+            <Text style={styles.hintPillText}>Ready for pickup</Text>
+          </View>
+        )}
       </View>
 
       {/* Orders List / Loading / Empty */}
@@ -273,14 +314,15 @@ const styles = StyleSheet.create({
   },
   searchContainer: {
     paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderBottomWidth: 1,
+    paddingTop: 10,
+    paddingBottom: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
   },
   searchBar: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 12,
-    paddingVertical: 7,
+    height: 44,
     borderWidth: 1,
   },
   searchIcon: {
@@ -288,43 +330,69 @@ const styles = StyleSheet.create({
   },
   searchInput: {
     flex: 1,
-    fontSize: 13,
+    fontSize: 13.5,
     paddingVertical: 0,
+    fontWeight: '500',
   },
-  tabBar: {
-    flexDirection: 'row',
-    borderBottomWidth: 1,
+  tabBarWrapper: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    paddingVertical: 8,
   },
-  tabItem: {
-    flex: 1,
-    paddingVertical: 12,
-    alignItems: 'center',
-    borderBottomWidth: 2,
-    borderBottomColor: 'transparent',
+  tabScrollContent: {
+    paddingHorizontal: 16,
+    gap: 8,
   },
-  activeTabItem: {
-    borderBottomWidth: 2,
-  },
-  tabContentRow: {
+  tabPill: {
     flexDirection: 'row',
     alignItems: 'center',
+    paddingHorizontal: 13,
+    paddingVertical: 7,
+    borderRadius: 20,
+    borderWidth: 1.2,
+  },
+  tabIcon: {
+    marginRight: 5,
   },
   tabLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  activeTabLabel: {
-    fontWeight: '700',
+    fontSize: 12.5,
+    letterSpacing: 0.2,
   },
   tabBadge: {
-    marginLeft: 5,
+    marginLeft: 6,
+    minWidth: 20,
+    height: 20,
     paddingHorizontal: 5,
-    paddingVertical: 1.5,
-    borderRadius: 8,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   tabBadgeText: {
-    fontSize: 10,
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  summaryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    paddingBottom: 4,
+  },
+  summaryCountText: {
+    fontSize: 12.5,
     fontWeight: '700',
+  },
+  hintPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
+  },
+  hintPillText: {
+    fontSize: 10.5,
+    fontWeight: '700',
+    color: '#B45309',
   },
   skeletonContainer: {
     padding: 16,
@@ -335,6 +403,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   listContent: {
-    paddingTop: 8,
+    paddingTop: 6,
   },
 });

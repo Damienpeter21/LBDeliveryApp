@@ -262,10 +262,23 @@ export const AddressProvider: React.FC<{ children: React.ReactNode }> = ({ child
   );
 };
 
+const FALLBACK_ADDRESS_CONTEXT: AddressContextType = {
+  addresses: [],
+  selectedAddress: null,
+  loading: false,
+  addAddress: async () => ({} as SavedAddress),
+  updateAddress: async () => {},
+  deleteAddress: async () => {},
+  setDefaultAddress: async () => {},
+  selectAddress: () => {},
+  selectAndVerifyAddress: async () => null,
+  refreshAddresses: async () => {},
+};
+
 export const useAddress = (): AddressContextType => {
   const context = useContext(AddressContext);
   if (!context) {
-    throw new Error('useAddress must be used within an AddressProvider');
+    return FALLBACK_ADDRESS_CONTEXT;
   }
   return context;
 };

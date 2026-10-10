@@ -185,6 +185,7 @@ export const mapDeliveryPickingToOrder = (
     id,
     pickingId,
     orderNumber,
+    origin: raw.origin || undefined,
     date,
     time,
     status,

@@ -38,6 +38,7 @@ export interface Order {
   id: string;
   pickingId?: number;
   orderNumber: string;
+  origin?: string;
   date: string;
   time: string;
   status: OrderStatus;

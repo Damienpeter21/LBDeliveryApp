@@ -74,14 +74,6 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     }
   };
 
-  const handleDemoFill = () => {
-    setEmail('karthik.delivery@example.com');
-    setPassword('1234');
-    setEmailError(null);
-    setPasswordError(null);
-    clearError();
-  };
-
   const handleGoogleSignInPress = () => {
     setShowGooglePicker(true);
   };
@@ -200,21 +192,6 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
             error={passwordError || undefined}
             hasError={!!error}
           />
-
-          {/* Demo Login Quick Fill */}
-          <TouchableOpacity
-            style={[
-              styles.demoFillBtn,
-              { backgroundColor: colors.surfaceVariant, borderColor: colors.border },
-            ]}
-            onPress={handleDemoFill}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="flash" size={14} color={colors.primary} style={{ marginRight: 6 }} />
-            <Text style={[styles.demoFillText, { color: colors.primary }]}>
-              Quick Fill Demo Partner (karthik.delivery@example.com)
-            </Text>
-          </TouchableOpacity>
 
           {/* ── Login Error Banner ──────────────────────────────────────────
               Shown when the API returns an error (e.g. wrong credentials).
@@ -398,25 +375,10 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     elevation: 3,
   },
-  demoFillBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-    borderWidth: 1,
-    marginTop: 4,
-    marginBottom: 14,
-  },
-  demoFillText: {
-    fontSize: 12,
-    fontWeight: '700',
-  },
   forgotPassBtn: {
     alignSelf: 'flex-end',
     marginBottom: 16,
-    marginTop: -4,
+    marginTop: 0,
   },
   forgotPassText: {
     fontSize: 13,

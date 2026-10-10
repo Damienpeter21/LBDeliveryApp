@@ -135,6 +135,11 @@ export const OrderCard: React.FC<OrderCardProps> = ({
             <Text style={[styles.orderNumberText, { color: colors.textPrimary }]}>
               #{cleanOrderNumber}
             </Text>
+            {order.origin ? (
+              <Text style={[styles.orderOriginText, { color: colors.textTertiary }]}>
+                {' '}({order.origin})
+              </Text>
+            ) : null}
           </View>
 
           <View
@@ -267,15 +272,28 @@ export const OrderCard: React.FC<OrderCardProps> = ({
           {/* Amount / Collection Box */}
           <View style={styles.amountBox}>
             <Text style={[styles.amountLabel, { color: colors.textTertiary }]}>
-              {order.isCod ? 'CASH TO COLLECT' : 'ORDER TOTAL'}
+              {order.isCod
+                ? 'CASH TO COLLECT'
+                : order.totalAmount > 0
+                ? 'PAID ONLINE'
+                : 'PAYMENT STATUS'}
             </Text>
             <Text
               style={[
                 styles.amountValue,
-                { color: order.isCod ? '#D97706' : colors.primary },
+                {
+                  color: order.isCod
+                    ? '#D97706'
+                    : '#16A34A',
+                  fontSize: !order.isCod && order.totalAmount === 0 ? 13 : 15,
+                },
               ]}
             >
-              ₹{order.totalAmount.toFixed(2)}
+              {order.isCod
+                ? `₹${order.totalAmount.toFixed(2)}`
+                : order.totalAmount > 0
+                ? `₹${order.totalAmount.toFixed(2)}`
+                : 'Prepaid ✓'}
             </Text>
           </View>
         </View>
@@ -372,6 +390,11 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '800',
     letterSpacing: 0.3,
+  },
+  orderOriginText: {
+    fontSize: 11,
+    fontWeight: '600',
+    marginLeft: 2,
   },
   statusBadge: {
     flexDirection: 'row',

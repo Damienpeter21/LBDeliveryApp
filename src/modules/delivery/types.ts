@@ -29,6 +29,7 @@ export interface DeliveryLoginPayload {
   db?: string;
   login: string;
   password: string;
+  app_type?: string;
 }
 
 export interface DeliveryPartnerProfile {

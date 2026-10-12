@@ -10,7 +10,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from 'react-native-vector-icons/Ionicons';
-import { GOOGLE_SETTINGS } from '../../../app/config';
+import { GOOGLE_SETTINGS, ODOO_CONFIG } from '../../../app/config';
 import { useTheme } from '../../../theme';
 import { AuthButton } from '../components/AuthButton';
 import { AuthInput } from '../components/AuthInput';
@@ -68,7 +68,13 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
 
     if (hasValidationErrors) return;
 
-    const success = await login({ email: cleanEmail, password });
+    const success = await login({
+      db: ODOO_CONFIG.DB,
+      login: cleanEmail,
+      email: cleanEmail,
+      password,
+      app_type: 'delivery',
+    });
     if (success && onLoginSuccess) {
       onLoginSuccess();
     }

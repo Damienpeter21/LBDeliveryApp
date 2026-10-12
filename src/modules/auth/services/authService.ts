@@ -30,9 +30,11 @@ export interface AuthUser {
 }
 
 export interface LoginPayload {
-  email: string;
+  email?: string;
+  login?: string;
   password: string;
   db?: string;
+  app_type?: string;
 }
 
 export interface RegisterPayload {
@@ -90,8 +92,10 @@ export class AuthService {
    * Performs Delivery Partner login via /web/session/authenticate
    */
   static async login(payload: LoginPayload): Promise<AuthUser> {
-    const email = (payload.email ?? '').trim();
+    const email = (payload.login ?? payload.email ?? '').trim();
     const password = (payload.password ?? '').trim();
+    const db = (payload.db || ODOO_CONFIG.DB).trim();
+    const app_type = (payload.app_type || 'delivery').trim();
 
     if (!email || !password) {
       throw new Error('Email and password are required');
@@ -99,9 +103,10 @@ export class AuthService {
 
     try {
       const response = await DeliveryApiService.login({
-        db: payload.db || ODOO_CONFIG.DB,
+        db,
         login: email,
         password,
+        app_type,
       });
 
       const result = response?.result !== undefined ? response.result : response;
@@ -226,7 +231,7 @@ export class AuthService {
   static async loginWithGoogle(
     payload?: Partial<LoginPayload & { name?: string }>,
   ): Promise<AuthUser> {
-    const rawEmail = (payload?.email || '').trim();
+    const rawEmail = (payload?.login || payload?.email || '').trim();
     if (!rawEmail) {
       throw new Error('Please select or enter a Google account.');
     }
@@ -243,7 +248,13 @@ export class AuthService {
       throw new Error('Password is required to sign in with this account.');
     }
 
-    return await this.login({ email, password });
+    return await this.login({
+      email,
+      login: email,
+      password,
+      db: payload?.db || ODOO_CONFIG.DB,
+      app_type: payload?.app_type || 'delivery',
+    });
   }
 
   /**

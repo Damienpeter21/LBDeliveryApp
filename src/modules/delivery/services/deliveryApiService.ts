@@ -109,9 +109,10 @@ export class DeliveryApiService {
    * POST /web/session/authenticate
    */
   static async login(payload: DeliveryLoginPayload): Promise<any> {
-    const db = payload.db || ODOO_CONFIG.DB;
+    const db = (payload.db || ODOO_CONFIG.DB).trim();
     const login = payload.login.trim();
     const password = payload.password.trim();
+    const app_type = (payload.app_type || 'delivery').trim();
 
     try {
       return await callDeliveryEndpoint(
@@ -120,6 +121,7 @@ export class DeliveryApiService {
           db,
           login,
           password,
+          app_type,
         },
         true, // withMethodCall
       );
@@ -138,6 +140,7 @@ export class DeliveryApiService {
             db: ODOO_CONFIG.ALT_DB,
             login,
             password,
+            app_type,
           },
           true,
         );
@@ -248,7 +251,7 @@ export class DeliveryApiService {
         [[Number(pickingId)], { scheduled_date: todayStr, delivery_driver_id: Number(driverUserId) }],
         {},
       );
-    } catch (_) {}
+    } catch (_) { }
 
     return res;
   }
@@ -327,7 +330,7 @@ export class DeliveryApiService {
         [[Number(payload.picking_id)], { delivery_app_status: 'delivered' }],
         {},
       );
-    } catch (_) {}
+    } catch (_) { }
 
     return res;
   }

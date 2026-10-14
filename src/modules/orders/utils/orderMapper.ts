@@ -341,9 +341,14 @@ export const mapDeliveryPickingToOrder = (
       raw.hub_address ||
       raw.source_location_address ||
       'Mathigiri Main Road, Hosur',
-    eta: raw.eta || '15-20 mins',
-    deliveryOtp: raw.delivery_otp ? String(raw.delivery_otp) : undefined,
-    cancelReason: raw.cancel_reason,
+    deliveryOtp:
+      raw.delivery_otp && raw.delivery_otp !== false
+        ? String(raw.delivery_otp).trim()
+        : raw.otp && raw.otp !== false
+        ? String(raw.otp).trim()
+        : raw.deliveryOtp
+        ? String(raw.deliveryOtp).trim()
+        : undefined,
     latitude: raw.latitude,
     longitude: raw.longitude,
     customerLatitude: raw.customer_latitude || raw.latitude,

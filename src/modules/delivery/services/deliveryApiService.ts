@@ -59,8 +59,20 @@ async function callDeliveryEndpoint<T = any>(
 
     // In Odoo jsonrpc, successful results are often wrapped in result
     const result = response.data?.result !== undefined ? response.data.result : response.data;
-    if (result && typeof result === 'object' && (result.status === 'error' || result.status === 'fail')) {
-      const message = result.message || `Operation failed for ${endpoint}`;
+    if (
+      result &&
+      typeof result === 'object' &&
+      (result.status === 'error' ||
+        result.status === 'fail' ||
+        result.success === false ||
+        result.res === false ||
+        (result.error && typeof result.error === 'string'))
+    ) {
+      const message =
+        result.message ||
+        result.error ||
+        result.msg ||
+        `Operation failed for ${endpoint}`;
       console.warn(`[Delivery API Business Error] ${endpoint}:`, message);
       throw new Error(message);
     }
@@ -379,6 +391,20 @@ export class DeliveryApiService {
       longitude: payload.longitude ?? 77.8284,
     });
 
+    // Check if the endpoint returned an error or unsuccessful response before updating Odoo status
+    if (
+      res &&
+      typeof res === 'object' &&
+      (res.status === 'error' ||
+        res.status === 'fail' ||
+        res.success === false ||
+        res.res === false)
+    ) {
+      throw new Error(
+        res.message || res.error || 'Server rejected delivery OTP. Verification failed.',
+      );
+    }
+
     // Ensure delivery_app_status is set to 'delivered' so all queries identify it as delivered
     try {
       await callOdooRpc(
@@ -485,34 +511,43 @@ export class DeliveryApiService {
   /**
    * Postman: "Collect Cash Physically" (COD Reconciliation)
    * POST /api/delivery/cod_reconciliation
+   * Updates driver daily cash balance
    */
   static async collectCashPhysically(payload: CodReconciliationPayload): Promise<any> {
-    return callDeliveryEndpoint('/api/delivery/cod_reconciliation', {
+    const params = {
       order_id: Number(payload.order_id),
+      sale_order_id: Number(payload.order_id),
       driver_user_id: Number(payload.driver_user_id),
       amount_collected: Number(payload.amount_collected),
+      amount: Number(payload.amount_collected),
       journal_id: payload.journal_id ?? 7,
       payment_reference: payload.payment_reference || `COD-REC-${Date.now().toString().slice(-6)}`,
-    });
+    };
+    return callDeliveryEndpoint('/api/delivery/cod_reconciliation', params);
   }
 
   /**
    * Postman: "Collect Payment Online" (Razorpay)
-   * POST /api/v1/sale/process_razorpay_payment
+   * POST /api/v1/sale/process_razor_payment (fallback: /api/v1/sale/process_razorpay_payment)
    */
   static async processRazorpayPayment(payload: RazorpayPaymentPayload): Promise<any> {
-    return callDeliveryEndpoint(
-      '/api/v1/sale/process_razorpay_payment',
-      {
-        order_id: Number(payload.order_id),
-        journal_id: payload.journal_id ?? 6,
-        razorpay_payment_id: payload.razorpay_payment_id,
-        razorpay_order_id: payload.razorpay_order_id,
-        razorpay_signature: payload.razorpay_signature,
-        payment_status: payload.payment_status || 'success',
-      },
-      true,
-    );
+    const params = {
+      order_id: Number(payload.order_id),
+      sale_order_id: Number(payload.order_id),
+      journal_id: payload.journal_id ?? 6,
+      razorpay_payment_id: payload.razorpay_payment_id,
+      razorpay_order_id: payload.razorpay_order_id || '',
+      razorpay_signature: payload.razorpay_signature || '',
+      payment_status: payload.payment_status || 'success',
+    };
+
+    try {
+      // First call /api/v1/sale/process_razor_payment as specified by API docs
+      return await callDeliveryEndpoint('/api/v1/sale/process_razor_payment', params, true);
+    } catch (err: any) {
+      // Fallback to /api/v1/sale/process_razorpay_payment if endpoint differs
+      return await callDeliveryEndpoint('/api/v1/sale/process_razorpay_payment', params, true);
+    }
   }
 
   /**

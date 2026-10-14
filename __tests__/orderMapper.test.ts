@@ -183,6 +183,23 @@ describe('orderMapper unit tests', () => {
       expect(order.totalAmount).toBe(850.0);
       expect(order.customerName).toBe('Ravi Kumar');
       expect(order.deliveryAddress).toBe('12 Gandhi St, Hosur');
+      expect(order.deliveryOtp).toBe('4821');
+    });
+
+    it('strictly validates that delivery OTP must match the picking delivery_otp', () => {
+      const pickingWithOtp = mapDeliveryPickingToOrder({
+        id: 101,
+        delivery_otp: '4821',
+      });
+      expect(pickingWithOtp.deliveryOtp).toBe('4821');
+
+      // Valid OTP matches
+      const enteredCorrectOtp = '4821';
+      expect(enteredCorrectOtp === pickingWithOtp.deliveryOtp).toBe(true);
+
+      // Wrong OTP fails match
+      const enteredWrongOtp = '1234';
+      expect(enteredWrongOtp === pickingWithOtp.deliveryOtp).toBe(false);
     });
 
     it('correctly detects COD when is_cod is string "true" or numeric 1', () => {

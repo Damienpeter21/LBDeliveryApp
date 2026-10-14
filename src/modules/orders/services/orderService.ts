@@ -79,6 +79,16 @@ export class OrderService {
         );
         const rpcList = Array.isArray(rpcRes) ? rpcRes : rpcRes?.result;
         if (Array.isArray(rpcList) && rpcList.length > 0) {
+          // Enrich any orders already in list if their deliveryOtp wasn't set
+          const rpcMap = new Map(rpcList.map((item: any) => [Number(item.id), item]));
+          for (const ord of orders) {
+            const pId = ord.pickingId || Number(ord.id);
+            const rpcItem = rpcMap.get(pId);
+            if (rpcItem && !ord.deliveryOtp && rpcItem.delivery_otp && rpcItem.delivery_otp !== false) {
+              ord.deliveryOtp = String(rpcItem.delivery_otp).trim();
+            }
+          }
+
           const existingIds = new Set(orders.map(o => o.pickingId || Number(o.id)));
           const pickingsToEnrich = rpcList.filter(item => !existingIds.has(Number(item.id)));
 
@@ -526,11 +536,63 @@ export class OrderService {
         storeAddress: mappedOrder.storeAddress || baseOrder?.storeAddress,
         storeLatitude: mappedOrder.storeLatitude ?? baseOrder?.storeLatitude,
         storeLongitude: mappedOrder.storeLongitude ?? baseOrder?.storeLongitude,
+        deliveryOtp:
+          (picking?.delivery_otp && picking.delivery_otp !== false
+            ? String(picking.delivery_otp).trim()
+            : undefined) ||
+          mappedOrder.deliveryOtp ||
+          baseOrder?.deliveryOtp,
       };
     } catch (err) {
       console.warn('Error fetching live order details:', err);
       return baseOrder || mapDeliveryPickingToOrder({ id: pickingId });
     }
+  }
+
+  /**
+   * Fetches the authoritative delivery OTP for a picking from live APIs.
+   * Checks all_my_delivery, unassigned pickings, and stock.picking read.
+   */
+  static async getDeliveryOtp(pickingId: number, driverUserId?: number): Promise<string | null> {
+    const pId = Number(pickingId);
+
+    // 1. Try querying driver's active deliveries
+    if (driverUserId) {
+      try {
+        const res = await DeliveryApiService.getMyDeliveries(driverUserId);
+        const list = extractPickingsArray(res);
+        const picking = list.find((p: any) => Number(p.id || p.picking_id) === pId);
+        if (picking && picking.delivery_otp && picking.delivery_otp !== false) {
+          return String(picking.delivery_otp).trim();
+        }
+      } catch (_) {}
+    }
+
+    // 2. Try querying unassigned pickings
+    try {
+      const res = await DeliveryApiService.getUnassignedOrders();
+      const list = extractPickingsArray(res);
+      const picking = list.find((p: any) => Number(p.id || p.picking_id) === pId);
+      if (picking && picking.delivery_otp && picking.delivery_otp !== false) {
+        return String(picking.delivery_otp).trim();
+      }
+    } catch (_) {}
+
+    // 3. Try reading directly from Odoo stock.picking
+    try {
+      const rpcRes: any = await callOdooRpc(
+        'stock.picking',
+        'read',
+        [[pId]],
+        { fields: ['id', 'delivery_otp'] },
+      );
+      const rpcItem = Array.isArray(rpcRes) ? rpcRes[0] : rpcRes?.result?.[0];
+      if (rpcItem && rpcItem.delivery_otp && rpcItem.delivery_otp !== false) {
+        return String(rpcItem.delivery_otp).trim();
+      }
+    } catch (_) {}
+
+    return null;
   }
 
   /**

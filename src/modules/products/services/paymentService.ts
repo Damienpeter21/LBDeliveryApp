@@ -510,6 +510,51 @@ export class PaymentService {
   }
 
   /**
+   * Checks if any successful payment has been made against a dynamic Razorpay QR Code.
+   * Calls GET https://api.razorpay.com/v1/payments/qr_codes/{qrId}/payments
+   */
+  static async checkRazorpayQrPayments(
+    qrId: string,
+  ): Promise<{ isPaid: boolean; paymentId?: string }> {
+    if (!qrId || !qrId.startsWith('qr_') || qrId.startsWith('qr_mock')) {
+      return { isPaid: false };
+    }
+    const key = API_SETTINGS.razorPay?.key || RAZORPAY_SETTINGS.keyId;
+    const secret = API_SETTINGS.razorPay?.secret || RAZORPAY_SETTINGS.keySecret;
+    if (!key || !secret) {
+      return { isPaid: false };
+    }
+
+    try {
+      const authHeader = `Basic ${toBase64(`${key}:${secret}`)}`;
+      const res = await axios.get(
+        `https://api.razorpay.com/v1/payments/qr_codes/${qrId}/payments`,
+        {
+          headers: {
+            Authorization: authHeader,
+          },
+          timeout: 4000,
+          skipAuth: true,
+        },
+      );
+
+      const items = res?.data?.items;
+      if (Array.isArray(items) && items.length > 0) {
+        const successful = items.find(
+          (p: any) => p.status === 'captured' || p.status === 'authorized',
+        );
+        if (successful) {
+          return { isPaid: true, paymentId: successful.id };
+        }
+      }
+    } catch (_) {
+      // Ignore network / polling error silently
+    }
+
+    return { isPaid: false };
+  }
+
+  /**
    * Opens Razorpay Mobile Checkout bottomsheet SDK.
    * Uses Razorpay Key ID and Secret configured in API_SETTINGS.razorPay.
    * Postman: "Razor pay" (Payment item 8)

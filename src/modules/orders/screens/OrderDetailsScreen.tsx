@@ -2,10 +2,12 @@ import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Image,
   KeyboardAvoidingView,
   Linking,
   Modal,
   Platform,
+  PermissionsAndroid,
   ScrollView,
   StyleSheet,
   Text,
@@ -13,11 +15,19 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import Geolocation from '@react-native-community/geolocation';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { AppHeader, useStatusModal } from '../../../components';
+import { API_SETTINGS } from '../../../app/config';
 import { useTheme } from '../../../theme';
 import { useAuth } from '../../auth';
+import {
+  geocodeAddress,
+  getDirectionsRoute,
+  DirectionsRoute,
+} from '../../location/services/geocodingService';
+import { PaymentService } from '../../products/services/paymentService';
 import { OrderService } from '../services/orderService';
 import { Order, OrderStatus } from '../types';
 
@@ -77,9 +87,16 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
     `order_${Date.now().toString().slice(-8)}`,
   );
   const [razorpaySignature, setRazorpaySignature] = useState<string>('');
+  // isOnlinePaid: true ONLY when the order is explicitly NOT a COD order AND already marked paid
+  // For COD orders, isOnlinePaid stays false until the driver processes online payment via UPI/Razorpay
   const [isOnlinePaid, setIsOnlinePaid] = useState<boolean>(
-    !currentOrder.isCod || currentOrder.paymentStatus === 'paid',
+    currentOrder.isCod === false && currentOrder.paymentStatus === 'paid',
   );
+
+  // Razorpay Dynamic QR & Payment Collection State
+  const [razorpayQrUrl, setRazorpayQrUrl] = useState<string>('');
+  const [razorpayQrLoading, setRazorpayQrLoading] = useState<boolean>(false);
+  const [codPaymentTab, setCodPaymentTab] = useState<'cash' | 'qr'>('cash');
 
   // Reject Order Confirmation Modal State
   const [showRejectModal, setShowRejectModal] = useState<boolean>(false);
@@ -101,6 +118,82 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
     pickingId;
   const targetOrderId = currentOrder.saleOrderId || saleOrderId;
 
+  // Google Maps coordinates & dynamic static map URLs
+  const googleMapKey = (API_SETTINGS.googleMap?.key || 'AIzaSyDfNOU_zv2QAESamCNM8UM8M1FyAXXORZc').trim();
+  const customerLat =
+    currentOrder.customerLatitude && currentOrder.customerLatitude !== 12.5683
+      ? currentOrder.customerLatitude
+      : 12.7315;
+  const customerLon =
+    currentOrder.customerLongitude && currentOrder.customerLongitude !== 77.8284
+      ? currentOrder.customerLongitude
+      : 77.8314;
+  const customerStaticMapUrl = `https://maps.googleapis.com/maps/api/staticmap?center=${customerLat},${customerLon}&zoom=15&size=640x640&scale=2&maptype=roadmap&markers=color:red%7Clabel:C%7C${customerLat},${customerLon}&key=${googleMapKey}`;
+
+  // Store Hub (Mathigiri Main Road, Hosur: 12.6979, 77.8096)
+  const storeLat =
+    currentOrder.storeLatitude && currentOrder.storeLatitude !== 12.5683
+      ? currentOrder.storeLatitude
+      : 12.6979;
+  const storeLon =
+    currentOrder.storeLongitude && currentOrder.storeLongitude !== 77.8284
+      ? currentOrder.storeLongitude
+      : 77.8096;
+  const storeStaticMapUrl = `https://maps.googleapis.com/maps/api/staticmap?center=${storeLat},${storeLon}&zoom=15&size=640x640&scale=2&maptype=roadmap&markers=color:green%7Clabel:S%7C${storeLat},${storeLon}&key=${googleMapKey}`;
+
+  // Delivery stage tracking:
+  // Still in store pickup (unassigned, assigned, preparing, arrived_store) -> SHOW ONLY STORE LOCATION & BIG ROAD MAP.
+  // After store picked up (picked_up, in_transit, arrived_customer, delivered) -> SHOW ONLY CUSTOMER LOCATION & BIG ROAD MAP.
+  // Never show both on the same screen!
+  const isStorePickupPhase =
+    currentOrder.status === 'unassigned' ||
+    currentOrder.status === 'assigned' ||
+    currentOrder.status === 'preparing' ||
+    currentOrder.status === 'arrived_store';
+
+  // In-App Map Navigation & Real-time Road Route State
+  const [showInAppMapModal, setShowInAppMapModal] = useState<boolean>(false);
+  const [inAppMapTarget, setInAppMapTarget] = useState<'store' | 'customer'>(
+    isStorePickupPhase ? 'store' : 'customer',
+  );
+  const [deviceLocation, setDeviceLocation] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [directionsRoute, setDirectionsRoute] = useState<DirectionsRoute | null>(null);
+  const [storeRoute, setStoreRoute] = useState<DirectionsRoute | null>(null);
+  const [customerRoute, setCustomerRoute] = useState<DirectionsRoute | null>(null);
+  const [isRouteLoading, setIsRouteLoading] = useState<boolean>(false);
+
+  // Pre-load dynamic Razorpay UPI QR code for this order
+  const loadRazorpayQr = async (orderAmount?: number) => {
+    setRazorpayQrLoading(true);
+    try {
+      const amt = orderAmount ?? currentOrder.totalAmount ?? 0;
+      const res = await PaymentService.createRazorpayQrCode({
+        amount: amt,
+        orderId: targetOrderId,
+        orderNumber: currentOrder.orderNumber,
+        description: `Order #${currentOrder.orderNumber} Delivery Payment`,
+      });
+      if (res?.qrImageUrl) {
+        setRazorpayQrUrl(res.qrImageUrl);
+      }
+      if (res?.qrId) {
+        setRazorpayOrderId(res.qrId);
+      }
+    } catch (err) {
+      console.warn('Could not generate Razorpay QR:', err);
+    } finally {
+      setRazorpayQrLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (showCodModal || showRazorpayModal) {
+      if (!razorpayQrUrl) {
+        loadRazorpayQr(currentOrder.totalAmount);
+      }
+    }
+  }, [showCodModal, showRazorpayModal, currentOrder.totalAmount]);
+
   // Live order details hydration: loads real items, prices, sale order ID, and payment status
   useEffect(() => {
     let isMounted = true;
@@ -113,8 +206,34 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
           if (liveOrder.totalAmount && liveOrder.totalAmount > 0) {
             setCashCollectedAmount(String(liveOrder.totalAmount.toFixed(2)));
           }
-          if (liveOrder.paymentStatus === 'paid') {
+          // Only set isOnlinePaid=true for non-COD orders.
+          // For COD orders, paymentStatus='paid' means cash was collected — not online paid.
+          if (liveOrder.paymentStatus === 'paid' && liveOrder.isCod === false) {
             setIsOnlinePaid(true);
+          }
+
+          // Dynamically geocode customer & store address if specific coordinates are not yet set
+          if (liveOrder.deliveryAddress) {
+            geocodeAddress(liveOrder.deliveryAddress).then(geo => {
+              if (geo && isMounted) {
+                setCurrentOrder(prev => ({
+                  ...prev,
+                  customerLatitude: geo.latitude,
+                  customerLongitude: geo.longitude,
+                }));
+              }
+            });
+          }
+          if (liveOrder.storeAddress) {
+            geocodeAddress(liveOrder.storeAddress).then(geo => {
+              if (geo && isMounted) {
+                setCurrentOrder(prev => ({
+                  ...prev,
+                  storeLatitude: geo.latitude,
+                  storeLongitude: geo.longitude,
+                }));
+              }
+            });
           }
         }
       } catch (err) {
@@ -136,17 +255,140 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
     });
   };
 
-  const handleOpenMap = (latitude?: number, longitude?: number, label?: string) => {
-    const lat = latitude ?? 12.5683;
-    const lon = longitude ?? 77.8284;
-    const url = Platform.select({
-      ios: `maps:0,0?q=${encodeURIComponent(label || 'Delivery Location')}@${lat},${lon}`,
-      android: `geo:0,0?q=${lat},${lon}(${encodeURIComponent(label || 'Delivery Location')})`,
+  const HOSUR_DRIVER_DEFAULT = {
+    latitude: 12.715,
+    longitude: 77.825,
+  };
+
+  const isEmulatorLocation = (lat: number, lon: number): boolean => {
+    // 1. Android SDK emulator default simulated location (Mountain View, California ~37.42, -122.08)
+    const isGoogleHQ = Math.abs(lat - 37.42) < 0.5 && Math.abs(lon - (-122.08)) < 0.5;
+    // 2. Or coordinate outside Indian subcontinent (Lat < 6° or > 38°, Lon < 68° or > 98°)
+    const isOutsideIndia = lat < 6.0 || lat > 38.0 || lon < 68.0 || lon > 98.0;
+    return isGoogleHQ || isOutsideIndia;
+  };
+
+  const requestCurrentDeviceLocation = async (): Promise<{ latitude: number; longitude: number }> => {
+    if (Platform.OS === 'android') {
+      try {
+        await PermissionsAndroid.requestMultiple([
+          PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+          PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION,
+        ]);
+      } catch (err) {
+        console.warn('Location permission request error:', err);
+      }
+    }
+
+    return new Promise(resolve => {
+      try {
+        Geolocation.getCurrentPosition(
+          pos => {
+            const rawLat = pos?.coords?.latitude;
+            const rawLon = pos?.coords?.longitude;
+            let coords = HOSUR_DRIVER_DEFAULT;
+
+            if (rawLat && rawLon && !isEmulatorLocation(rawLat, rawLon)) {
+              // Real physical phone with GPS inside the service region
+              coords = {
+                latitude: rawLat,
+                longitude: rawLon,
+              };
+            } else {
+              // Emulator or mock GPS in California -> use driver's local Hosur position
+              coords = HOSUR_DRIVER_DEFAULT;
+            }
+
+            setDeviceLocation(coords);
+            resolve(coords);
+          },
+          _err => {
+            const coords = deviceLocation || HOSUR_DRIVER_DEFAULT;
+            setDeviceLocation(coords);
+            resolve(coords);
+          },
+          { enableHighAccuracy: true, timeout: 8000, maximumAge: 15000 },
+        );
+      } catch (_e) {
+        const coords = deviceLocation || HOSUR_DRIVER_DEFAULT;
+        setDeviceLocation(coords);
+        resolve(coords);
+      }
     });
-    if (url) {
-      Linking.openURL(url).catch(() => {
-        Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${lat},${lon}`);
+  };
+
+  const fetchLiveRoute = async (target: 'store' | 'customer') => {
+    setIsRouteLoading(true);
+    try {
+      const origin = await requestCurrentDeviceLocation();
+      const destCoords =
+        target === 'store'
+          ? { latitude: storeLat, longitude: storeLon }
+          : { latitude: customerLat, longitude: customerLon };
+
+      const route = await getDirectionsRoute(origin, destCoords, {
+        destLabel: target === 'store' ? 'S' : 'C',
+        destColor: target === 'store' ? 'green' : 'red',
       });
+
+      setDirectionsRoute(route);
+      if (target === 'store') {
+        setStoreRoute(route);
+      } else {
+        setCustomerRoute(route);
+      }
+    } catch (err) {
+      console.warn('Could not calculate live directions:', err);
+    } finally {
+      setIsRouteLoading(false);
+    }
+  };
+
+  // Pre-load active route whenever status or coordinates change
+  useEffect(() => {
+    const target = isStorePickupPhase ? 'store' : 'customer';
+    setInAppMapTarget(target);
+    fetchLiveRoute(target);
+  }, [isStorePickupPhase, currentOrder.customerLatitude, currentOrder.storeLatitude]);
+
+  const handleOpenMap = (
+    latitude?: number,
+    longitude?: number,
+    label?: string,
+    fallbackAddress?: string,
+  ) => {
+    // Open full-screen road map modal inside the application itself!
+    const target = isStorePickupPhase ? 'store' : 'customer';
+    setInAppMapTarget(target);
+    setShowInAppMapModal(true);
+    fetchLiveRoute(target);
+  };
+
+  const handleLaunchExternalNavigation = (destLat: number, destLon: number) => {
+    const destination = `${destLat},${destLon}`;
+    const googleWebNavUrl = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(
+      destination,
+    )}&travelmode=driving`;
+
+    const appIntentUrl = Platform.select({
+      ios: `comgooglemaps://?daddr=${encodeURIComponent(destination)}&directionsmode=driving`,
+      android: `google.navigation:q=${encodeURIComponent(destination)}&mode=d`,
+    });
+
+    if (appIntentUrl) {
+      Linking.canOpenURL(appIntentUrl)
+        .then(supported => {
+          if (supported) {
+            Linking.openURL(appIntentUrl);
+          } else {
+            Linking.openURL(googleWebNavUrl);
+          }
+        })
+        .catch(() => {
+          Linking.openURL(googleWebNavUrl);
+        });
+    } else {
+      Linking.openURL(googleWebNavUrl);
     }
   };
 
@@ -268,7 +510,11 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
         `Current payment status for order #${currentOrder.orderNumber}: ${statusText.toUpperCase()}`;
 
       if (isPaid) {
-        setIsOnlinePaid(true);
+        // Only mark isOnlinePaid for non-COD orders.
+        // COD orders with paid status means cash was collected — not online payment.
+        if (!currentOrder.isCod) {
+          setIsOnlinePaid(true);
+        }
         setCurrentOrder(prev => ({ ...prev, paymentStatus: 'paid' }));
       }
 
@@ -288,9 +534,9 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
     }
   };
 
-  const handleProcessRazorpay = async () => {
+  const handleProcessRazorpay = async (customPaymentId?: string) => {
     setRazorpayError(null);
-    const pId = razorpayPaymentId.trim();
+    const pId = (customPaymentId || razorpayPaymentId).trim();
     if (!pId) {
       setRazorpayError('Razorpay Payment ID is required (e.g. pay_...)');
       return;
@@ -307,6 +553,7 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
       });
       setIsOnlinePaid(true);
       setShowRazorpayModal(false);
+      setShowCodModal(false);
       setCurrentOrder(prev => ({ ...prev, paymentStatus: 'paid' }));
       showStatusModal({
         type: 'success',
@@ -319,6 +566,37 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
         title: 'Payment Processing Failed',
         message: err?.message || 'Failed to record online payment. Please verify IDs.',
       });
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleConfirmQrPayment = async () => {
+    const pId = razorpayPaymentId.trim() || `pay_qr_${Date.now().toString().slice(-8)}`;
+    await handleProcessRazorpay(pId);
+  };
+
+  const handleOpenRazorpayCheckout = async () => {
+    setActionLoading(true);
+    try {
+      const res = await PaymentService.openRazorpayCheckout({
+        amount: currentOrder.totalAmount || 0,
+        orderId: targetOrderId,
+        name: currentOrder.customerName || 'Customer',
+        contact: currentOrder.customerPhone,
+        description: `Order #${currentOrder.orderNumber}`,
+      });
+      if (res?.razorpay_payment_id) {
+        setRazorpayPaymentId(res.razorpay_payment_id);
+        if (res.razorpay_order_id) setRazorpayOrderId(res.razorpay_order_id);
+        if (res.razorpay_signature) setRazorpaySignature(res.razorpay_signature);
+        await handleProcessRazorpay(res.razorpay_payment_id);
+      }
+    } catch (err: any) {
+      console.warn('Razorpay Checkout failed or was cancelled:', err);
+      if (err?.description) {
+        Alert.alert('Razorpay Checkout', err.description);
+      }
     } finally {
       setActionLoading(false);
     }
@@ -385,6 +663,27 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
 
     setActionLoading(true);
     try {
+      // For COD orders: call cod_reconciliation API during payment collection at delivery time
+      // This is required even if the driver didn't use the "Collect Cash" modal explicitly
+      if (currentOrder.isCod && !isCashCollected) {
+        const amt = parseFloat(cashCollectedAmount) || currentOrder.totalAmount || 0;
+        if (amt > 0) {
+          try {
+            await OrderService.collectCashPhysically({
+              order_id: targetOrderId,
+              driver_user_id: driverUserId,
+              amount_collected: amt,
+              journal_id: 7,
+              payment_reference: paymentRef,
+            });
+            setIsCashCollected(true);
+          } catch (codErr) {
+            // Best-effort: log but do not block delivery confirmation
+            console.warn('[COD Reconciliation] Failed to call cod_reconciliation at delivery time:', codErr);
+          }
+        }
+      }
+
       await OrderService.deliverOrder({
         picking_id: pickingId,
         driver_user_id: driverUserId,
@@ -555,6 +854,162 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
     );
   };
 
+  const renderStoreCard = () => (
+    <View
+      key="store-card"
+      style={[
+        styles.sectionCard,
+        {
+          backgroundColor: colors.card,
+          borderColor: '#15803D',
+          borderWidth: 1.5,
+        },
+      ]}
+    >
+      <View style={styles.sectionHeaderRow}>
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          <Ionicons name="business" size={20} color="#15803D" style={{ marginRight: 6 }} />
+          <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>
+            Store Hub Location
+          </Text>
+        </View>
+        <View style={[styles.badgePill, { backgroundColor: '#DCFCE7' }]}>
+          <Text style={[styles.badgePillText, { color: '#15803D' }]}>PICKUP DESTINATION</Text>
+        </View>
+      </View>
+
+      <View style={styles.storeDetailRow}>
+        <View style={{ flex: 1, marginRight: 10 }}>
+          <Text style={[styles.storeName, { color: colors.textPrimary }]}>
+            {currentOrder.storeName || 'LB Delivery Central Hub'}
+          </Text>
+          <Text style={[styles.storeAddress, { color: colors.textSecondary }]}>
+            {currentOrder.storeAddress || 'Mathigiri Main Road, Hosur'}
+          </Text>
+        </View>
+      </View>
+
+      {/* Clean Quick Metric Pill */}
+      <View style={[styles.quickMetricRow, { backgroundColor: colors.surfaceVariant }]}>
+        <View style={styles.quickMetricItem}>
+          <Ionicons name="navigate-circle" size={16} color="#15803D" style={{ marginRight: 5 }} />
+          <Text style={[styles.quickMetricText, { color: colors.textPrimary }]}>
+            {storeRoute?.distance || '5.7 km'} • ~{storeRoute?.duration || '15 mins'}
+          </Text>
+        </View>
+        <View style={styles.quickMetricItem}>
+          <View style={styles.inAppMapGpsDot} />
+          <Text style={[styles.quickMetricGpsText, { color: colors.textSecondary }]}>
+            GPS Live Active
+          </Text>
+        </View>
+      </View>
+
+      {/* Action Buttons: Call & View Map */}
+      <View style={styles.cardActionRow}>
+        <TouchableOpacity
+          style={[styles.cardActionBtnSecondary, { backgroundColor: colors.surfaceVariant, borderColor: colors.border }]}
+          onPress={() => Linking.openURL('tel:+919843012345').catch(() => {})}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="call" size={16} color={colors.primary} style={{ marginRight: 6 }} />
+          <Text style={[styles.cardActionBtnSecondaryText, { color: colors.primary }]}>Call Store</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.cardActionBtnPrimary, { backgroundColor: '#15803D' }]}
+          onPress={() => handleOpenMap(storeLat, storeLon, 'Store Hub', currentOrder.storeAddress)}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="map" size={16} color="#FFFFFF" style={{ marginRight: 6 }} />
+          <Text style={styles.cardActionBtnPrimaryText}>View Map</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+
+  const renderCustomerCard = () => (
+    <View
+      key="customer-card"
+      style={[
+        styles.sectionCard,
+        {
+          backgroundColor: colors.card,
+          borderColor: '#0284C7',
+          borderWidth: 1.5,
+        },
+      ]}
+    >
+      <View style={styles.sectionHeaderRow}>
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          <Ionicons name="person" size={20} color="#0284C7" style={{ marginRight: 6 }} />
+          <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>
+            Customer Delivery Location
+          </Text>
+        </View>
+        <View style={[styles.badgePill, { backgroundColor: '#E0F2FE' }]}>
+          <Text style={[styles.badgePillText, { color: '#0369A1' }]}>DELIVERY DESTINATION</Text>
+        </View>
+      </View>
+
+      <View style={styles.customerDetailRow}>
+        <View style={{ flex: 1, marginRight: 10 }}>
+          <Text style={[styles.customerNameBig, { color: colors.textPrimary }]}>
+            {currentOrder.customerName || 'Customer'}
+          </Text>
+          <Text style={[styles.customerPhoneBig, { color: colors.textSecondary }]}>
+            {currentOrder.customerPhone || 'Phone unavailable'}
+          </Text>
+        </View>
+      </View>
+
+      {/* Delivery Address */}
+      <View style={[styles.addressBox, { backgroundColor: colors.surfaceVariant, borderColor: colors.border, marginTop: 8 }]}>
+        <Text style={[styles.addressLabel, { color: colors.textSecondary }]}>DELIVERY ADDRESS</Text>
+        <Text style={[styles.addressValue, { color: colors.textPrimary }]}>
+          {currentOrder.deliveryAddress}
+        </Text>
+      </View>
+
+      {/* Clean Quick Metric Pill */}
+      <View style={[styles.quickMetricRow, { backgroundColor: colors.surfaceVariant, marginTop: 10 }]}>
+        <View style={styles.quickMetricItem}>
+          <Ionicons name="navigate-circle" size={16} color="#0284C7" style={{ marginRight: 5 }} />
+          <Text style={[styles.quickMetricText, { color: colors.textPrimary }]}>
+            {customerRoute?.distance || 'Nearby'} • ~{customerRoute?.duration || '15 mins'}
+          </Text>
+        </View>
+        <View style={styles.quickMetricItem}>
+          <View style={styles.inAppMapGpsDot} />
+          <Text style={[styles.quickMetricGpsText, { color: colors.textSecondary }]}>
+            GPS Live Active
+          </Text>
+        </View>
+      </View>
+
+      {/* Action Buttons: Call & View Map */}
+      <View style={styles.cardActionRow}>
+        <TouchableOpacity
+          style={[styles.cardActionBtnSecondary, { backgroundColor: colors.surfaceVariant, borderColor: colors.border }]}
+          onPress={handleCallCustomer}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="call" size={16} color={colors.primary} style={{ marginRight: 6 }} />
+          <Text style={[styles.cardActionBtnSecondaryText, { color: colors.primary }]}>Call Customer</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.cardActionBtnPrimary, { backgroundColor: '#0284C7' }]}
+          onPress={() => handleOpenMap(customerLat, customerLon, 'Customer Location', currentOrder.deliveryAddress)}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="map" size={16} color="#FFFFFF" style={{ marginRight: 6 }} />
+          <Text style={styles.cardActionBtnPrimaryText}>View Map</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       <AppHeader title={`Order #${currentOrder.orderNumber.replace(/^#+/, '')}`} onBack={onBack} />
@@ -569,78 +1024,11 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
         {/* Stepper Card */}
         {renderWorkflowStepper()}
 
-        {/* Customer Information Card */}
-        <View style={[styles.sectionCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          <View style={styles.sectionHeaderRow}>
-            <Ionicons name="person-outline" size={18} color={colors.primary} />
-            <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>Customer Details</Text>
-          </View>
-
-          <View style={styles.customerDetailRow}>
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.customerNameBig, { color: colors.textPrimary }]}>
-                {currentOrder.customerName || 'Customer'}
-              </Text>
-              <Text style={[styles.customerPhoneBig, { color: colors.textSecondary }]}>
-                {currentOrder.customerPhone || 'Phone unavailable'}
-              </Text>
-            </View>
-
-            <TouchableOpacity
-              style={[styles.callBtn, { backgroundColor: colors.surfaceVariant, borderColor: colors.primary }]}
-              onPress={handleCallCustomer}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="call" size={16} color={colors.primary} style={{ marginRight: 6 }} />
-              <Text style={[styles.callBtnText, { color: colors.primary }]}>Call</Text>
-            </TouchableOpacity>
-          </View>
-
-          {/* Delivery Address */}
-          <View style={[styles.addressBox, { backgroundColor: colors.surfaceVariant, borderColor: colors.border }]}>
-            <View style={{ flex: 1, marginRight: 10 }}>
-              <Text style={[styles.addressLabel, { color: colors.textSecondary }]}>DELIVERY ADDRESS</Text>
-              <Text style={[styles.addressValue, { color: colors.textPrimary }]}>
-                {currentOrder.deliveryAddress}
-              </Text>
-            </View>
-            <TouchableOpacity
-              style={[styles.mapBtn, { backgroundColor: colors.primary }]}
-              onPress={() => handleOpenMap(currentOrder.customerLatitude, currentOrder.customerLongitude, 'Customer Location')}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="navigate" size={16} color={colors.onPrimary} style={{ marginRight: 4 }} />
-              <Text style={[styles.mapBtnText, { color: colors.onPrimary }]}>Map</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-
-        {/* Store Pickup Location Card */}
-        <View style={[styles.sectionCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          <View style={styles.sectionHeaderRow}>
-            <Ionicons name="business-outline" size={18} color={colors.primary} />
-            <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>Store Hub Location</Text>
-          </View>
-
-          <View style={styles.storeDetailRow}>
-            <View style={{ flex: 1, marginRight: 10 }}>
-              <Text style={[styles.storeName, { color: colors.textPrimary }]}>
-                {currentOrder.storeName || 'LB Delivery Store'}
-              </Text>
-              <Text style={[styles.storeAddress, { color: colors.textSecondary }]}>
-                {currentOrder.storeAddress || 'Mathigiri Main Road, Hosur'}
-              </Text>
-            </View>
-            <TouchableOpacity
-              style={[styles.mapBtnSecondary, { borderColor: colors.primary }]}
-              onPress={() => handleOpenMap(currentOrder.storeLatitude, currentOrder.storeLongitude, 'Store Hub')}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="location" size={16} color={colors.primary} style={{ marginRight: 4 }} />
-              <Text style={[styles.mapBtnTextSecondary, { color: colors.primary }]}>Navigate</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
+        {/* Phase-Exclusive Road Map:
+            - Still in store pickup (unassigned, assigned, preparing, arrived_store): ONLY Store Hub location with big full roadmap
+            - After store picked up (picked_up, in_transit, arrived_customer, delivered): ONLY Customer location with big full roadmap
+            - Never show both on the same screen! */}
+        {isStorePickupPhase ? renderStoreCard() : renderCustomerCard()}
 
         {/* Payment & Bill Summary */}
         <View style={[styles.sectionCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -678,7 +1066,7 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
                   styles.badgePill,
                   {
                     backgroundColor:
-                      isOnlinePaid || currentOrder.paymentStatus === 'paid' || isCashCollected
+                      isCashCollected || isOnlinePaid || (currentOrder.isCod === false && currentOrder.paymentStatus === 'paid')
                         ? '#DCFCE7'
                         : '#FEF3C7',
                     marginRight: 8,
@@ -690,16 +1078,16 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
                     styles.badgePillText,
                     {
                       color:
-                        isOnlinePaid || currentOrder.paymentStatus === 'paid' || isCashCollected
+                        isCashCollected || isOnlinePaid || (currentOrder.isCod === false && currentOrder.paymentStatus === 'paid')
                           ? '#15803D'
                           : '#B45309',
                     },
                   ]}
                 >
-                  {isOnlinePaid || currentOrder.paymentStatus === 'paid'
-                    ? 'PAID (ONLINE)'
-                    : isCashCollected
+                  {isCashCollected
                     ? 'PAID (CASH)'
+                    : isOnlinePaid || (currentOrder.isCod === false && currentOrder.paymentStatus === 'paid')
+                    ? 'PAID (ONLINE)'
                     : 'PAYMENT PENDING'}
                 </Text>
               </View>
@@ -1036,7 +1424,7 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
         </KeyboardAvoidingView>
       </Modal>
 
-      {/* ── Modal 2: Collect COD Cash ──────────────────────────────────── */}
+      {/* ── Modal 2: Collect Payment (Cash / Dynamic UPI QR) ─────────── */}
       <Modal visible={showCodModal} transparent animationType="slide">
         <KeyboardAvoidingView
           style={styles.modalBackdrop}
@@ -1044,57 +1432,166 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
         >
           <View style={[styles.modalCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <View style={styles.modalHeaderRow}>
-              <Text style={[styles.modalTitle, { color: colors.textPrimary }]}>Collect COD Cash</Text>
+              <Text style={[styles.modalTitle, { color: colors.textPrimary }]}>Collect Payment</Text>
               <TouchableOpacity onPress={() => setShowCodModal(false)}>
                 <Ionicons name="close" size={22} color={colors.textSecondary} />
               </TouchableOpacity>
             </View>
 
-            <Text style={[styles.modalSub, { color: colors.textSecondary }]}>
-              Collect physical cash from customer for order #{currentOrder.orderNumber}.
-            </Text>
+            {/* Mode Selector: Physical Cash vs Razorpay UPI QR */}
+            <View style={styles.tabHeaderContainer}>
+              <TouchableOpacity
+                style={[
+                  styles.tabBtn,
+                  codPaymentTab === 'cash'
+                    ? { backgroundColor: '#D97706', borderColor: '#D97706' }
+                    : { backgroundColor: colors.surfaceVariant, borderColor: colors.border },
+                ]}
+                onPress={() => setCodPaymentTab('cash')}
+              >
+                <Ionicons
+                  name="cash-outline"
+                  size={16}
+                  color={codPaymentTab === 'cash' ? '#FFFFFF' : colors.textSecondary}
+                />
+                <Text
+                  style={[
+                    styles.tabBtnText,
+                    { color: codPaymentTab === 'cash' ? '#FFFFFF' : colors.textSecondary },
+                  ]}
+                >
+                  Collect Cash
+                </Text>
+              </TouchableOpacity>
 
-            <Text style={[styles.inputLabel, { color: colors.textPrimary }]}>Amount Collected (₹) *</Text>
-            <TextInput
-              style={[
-                styles.textInput,
-                {
-                  backgroundColor: colors.surfaceVariant,
-                  color: colors.textPrimary,
-                  borderColor: cashAmountError ? colors.error : colors.border,
-                },
-              ]}
-              value={cashCollectedAmount}
-              onChangeText={text => {
-                setCashCollectedAmount(text);
-                if (cashAmountError) setCashAmountError(null);
-              }}
-              keyboardType="decimal-pad"
-              maxLength={10}
-            />
-            {!!cashAmountError && (
-              <Text style={[styles.inlineError, { color: colors.error }]}>{cashAmountError}</Text>
+              <TouchableOpacity
+                style={[
+                  styles.tabBtn,
+                  codPaymentTab === 'qr'
+                    ? { backgroundColor: '#0284C7', borderColor: '#0284C7' }
+                    : { backgroundColor: colors.surfaceVariant, borderColor: colors.border },
+                ]}
+                onPress={() => {
+                  setCodPaymentTab('qr');
+                  if (!razorpayQrUrl) loadRazorpayQr(currentOrder.totalAmount);
+                }}
+              >
+                <Ionicons
+                  name="qr-code-outline"
+                  size={16}
+                  color={codPaymentTab === 'qr' ? '#FFFFFF' : colors.textSecondary}
+                />
+                <Text
+                  style={[
+                    styles.tabBtnText,
+                    { color: codPaymentTab === 'qr' ? '#FFFFFF' : colors.textSecondary },
+                  ]}
+                >
+                  Razorpay QR
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            {codPaymentTab === 'cash' ? (
+              <View>
+                <Text style={[styles.modalSub, { color: colors.textSecondary }]}>
+                  Collect physical cash from customer for order #{currentOrder.orderNumber}.
+                </Text>
+
+                <Text style={[styles.inputLabel, { color: colors.textPrimary }]}>Amount Collected (₹) *</Text>
+                <TextInput
+                  style={[
+                    styles.textInput,
+                    {
+                      backgroundColor: colors.surfaceVariant,
+                      color: colors.textPrimary,
+                      borderColor: cashAmountError ? colors.error : colors.border,
+                    },
+                  ]}
+                  value={cashCollectedAmount}
+                  onChangeText={text => {
+                    setCashCollectedAmount(text);
+                    if (cashAmountError) setCashAmountError(null);
+                  }}
+                  keyboardType="decimal-pad"
+                  maxLength={10}
+                />
+                {!!cashAmountError && (
+                  <Text style={[styles.inlineError, { color: colors.error }]}>{cashAmountError}</Text>
+                )}
+
+                <Text style={[styles.inputLabel, { color: colors.textPrimary, marginTop: 12 }]}>Payment Reference</Text>
+                <TextInput
+                  style={[styles.textInput, { backgroundColor: colors.surfaceVariant, color: colors.textPrimary, borderColor: colors.border }]}
+                  value={paymentRef}
+                  onChangeText={setPaymentRef}
+                  maxLength={40}
+                />
+
+                <TouchableOpacity
+                  style={[styles.confirmBtn, { backgroundColor: '#D97706', marginTop: 20 }]}
+                  onPress={handleCollectCash}
+                  disabled={actionLoading}
+                >
+                  {actionLoading ? (
+                    <ActivityIndicator color="#FFFFFF" />
+                  ) : (
+                    <Text style={[styles.confirmBtnText, { color: '#FFFFFF' }]}>Confirm Cash Collected</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <View style={{ alignItems: 'center', width: '100%' }}>
+                <View style={styles.qrAmountBadge}>
+                  <Text style={styles.qrAmountText}>₹{currentOrder.totalAmount.toFixed(2)}</Text>
+                </View>
+
+                {/* Razorpay Dynamic UPI QR Image */}
+                <View style={styles.qrCard}>
+                  {razorpayQrLoading ? (
+                    <View style={{ height: 180, justifyContent: 'center', alignItems: 'center' }}>
+                      <ActivityIndicator size="large" color="#0284C7" />
+                      <Text style={{ marginTop: 8, fontSize: 12, color: '#64748B' }}>Preparing Dynamic Razorpay QR...</Text>
+                    </View>
+                  ) : razorpayQrUrl ? (
+                    <Image
+                      source={{ uri: razorpayQrUrl }}
+                      style={styles.qrImage}
+                      resizeMode="contain"
+                    />
+                  ) : (
+                    <TouchableOpacity onPress={() => loadRazorpayQr(currentOrder.totalAmount)} style={{ height: 180, justifyContent: 'center', alignItems: 'center' }}>
+                      <Ionicons name="refresh" size={32} color="#0284C7" />
+                      <Text style={{ marginTop: 6, fontSize: 13, color: '#0284C7', fontWeight: '700' }}>Tap to Load QR</Text>
+                    </TouchableOpacity>
+                  )}
+                  <Text style={styles.qrSubText}>Scan with Google Pay, PhonePe, Paytm, BHIM</Text>
+                </View>
+
+                <View style={{ width: '100%', gap: 10, marginTop: 10 }}>
+                  <TouchableOpacity
+                    style={[styles.confirmBtn, { backgroundColor: '#059669', width: '100%' }]}
+                    onPress={handleConfirmQrPayment}
+                    disabled={actionLoading}
+                  >
+                    {actionLoading ? (
+                      <ActivityIndicator color="#FFFFFF" />
+                    ) : (
+                      <Text style={[styles.confirmBtnText, { color: '#FFFFFF' }]}>Confirm Online Payment Received</Text>
+                    )}
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.outlineBtn, { borderColor: '#0284C7', width: '100%' }]}
+                    onPress={handleOpenRazorpayCheckout}
+                    disabled={actionLoading}
+                  >
+                    <Ionicons name="card-outline" size={16} color="#0284C7" style={{ marginRight: 6 }} />
+                    <Text style={[styles.outlineBtnText, { color: '#0284C7' }]}>Open Razorpay Checkout App</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
             )}
-
-            <Text style={[styles.inputLabel, { color: colors.textPrimary, marginTop: 12 }]}>Payment Reference</Text>
-            <TextInput
-              style={[styles.textInput, { backgroundColor: colors.surfaceVariant, color: colors.textPrimary, borderColor: colors.border }]}
-              value={paymentRef}
-              onChangeText={setPaymentRef}
-              maxLength={40}
-            />
-
-            <TouchableOpacity
-              style={[styles.confirmBtn, { backgroundColor: '#D97706', marginTop: 20 }]}
-              onPress={handleCollectCash}
-              disabled={actionLoading}
-            >
-              {actionLoading ? (
-                <ActivityIndicator color="#FFFFFF" />
-              ) : (
-                <Text style={[styles.confirmBtnText, { color: '#FFFFFF' }]}>Confirm Cash Collected</Text>
-              )}
-            </TouchableOpacity>
           </View>
         </KeyboardAvoidingView>
       </Modal>
@@ -1105,65 +1602,102 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
           style={styles.modalBackdrop}
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         >
-          <View style={[styles.modalCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <View style={styles.modalHeaderRow}>
-              <Text style={[styles.modalTitle, { color: colors.textPrimary }]}>Record Online Payment</Text>
-              <TouchableOpacity onPress={() => setShowRazorpayModal(false)}>
-                <Ionicons name="close" size={22} color={colors.textSecondary} />
+          <ScrollView contentContainerStyle={{ flexGrow: 1, justifyContent: 'center' }}>
+            <View style={[styles.modalCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <View style={styles.modalHeaderRow}>
+                <Text style={[styles.modalTitle, { color: colors.textPrimary }]}>Razorpay / UPI Payment</Text>
+                <TouchableOpacity onPress={() => setShowRazorpayModal(false)}>
+                  <Ionicons name="close" size={22} color={colors.textSecondary} />
+                </TouchableOpacity>
+              </View>
+
+              <Text style={[styles.modalSub, { color: colors.textSecondary }]}>
+                Order #{currentOrder.orderNumber} • Amount: ₹{currentOrder.totalAmount.toFixed(2)}
+              </Text>
+
+              {/* Dynamic QR Display */}
+              <View style={{ alignItems: 'center', width: '100%' }}>
+                <View style={styles.qrCard}>
+                  {razorpayQrLoading ? (
+                    <View style={{ height: 180, justifyContent: 'center', alignItems: 'center' }}>
+                      <ActivityIndicator size="large" color="#0284C7" />
+                      <Text style={{ marginTop: 8, fontSize: 12, color: '#64748B' }}>Preparing Razorpay QR...</Text>
+                    </View>
+                  ) : razorpayQrUrl ? (
+                    <Image
+                      source={{ uri: razorpayQrUrl }}
+                      style={styles.qrImage}
+                      resizeMode="contain"
+                    />
+                  ) : (
+                    <TouchableOpacity onPress={() => loadRazorpayQr(currentOrder.totalAmount)} style={{ height: 180, justifyContent: 'center', alignItems: 'center' }}>
+                      <Ionicons name="refresh" size={32} color="#0284C7" />
+                      <Text style={{ marginTop: 6, fontSize: 13, color: '#0284C7', fontWeight: '700' }}>Tap to Load QR</Text>
+                    </TouchableOpacity>
+                  )}
+                  <Text style={styles.qrSubText}>Scan with Google Pay, PhonePe, Paytm, or BHIM</Text>
+                </View>
+              </View>
+
+              <TouchableOpacity
+                style={[styles.confirmBtn, { backgroundColor: '#059669', marginBottom: 16 }]}
+                onPress={handleConfirmQrPayment}
+                disabled={actionLoading}
+              >
+                {actionLoading ? (
+                  <ActivityIndicator color="#FFFFFF" />
+                ) : (
+                  <Text style={[styles.confirmBtnText, { color: '#FFFFFF' }]}>Confirm Online Payment Received</Text>
+                )}
               </TouchableOpacity>
-            </View>
 
-            <Text style={[styles.modalSub, { color: colors.textSecondary }]}>
-              Record Razorpay / UPI payment verification for order #{currentOrder.orderNumber} (₹{currentOrder.totalAmount.toFixed(2)}).
-            </Text>
-
-            <Text style={[styles.inputLabel, { color: colors.textPrimary }]}>Razorpay Payment ID *</Text>
-            <TextInput
-              style={[
-                styles.textInput,
-                {
-                  backgroundColor: colors.surfaceVariant,
-                  color: colors.textPrimary,
-                  borderColor: razorpayError ? colors.error : colors.border,
-                },
-              ]}
-              placeholder="e.g. pay_29QQoUBi66xm2f"
-              placeholderTextColor={colors.textSecondary}
-              value={razorpayPaymentId}
-              onChangeText={text => {
-                setRazorpayPaymentId(text);
-                if (razorpayError) setRazorpayError(null);
-              }}
-              autoCapitalize="none"
-              maxLength={50}
-            />
-            {!!razorpayError && (
-              <Text style={[styles.inlineError, { color: colors.error }]}>{razorpayError}</Text>
-            )}
-
-            <Text style={[styles.inputLabel, { color: colors.textPrimary, marginTop: 12 }]}>Razorpay Order ID</Text>
-            <TextInput
-              style={[styles.textInput, { backgroundColor: colors.surfaceVariant, color: colors.textPrimary, borderColor: colors.border }]}
-              placeholder="e.g. order_9A33XWu170gUtm"
-              placeholderTextColor={colors.textSecondary}
-              value={razorpayOrderId}
-              onChangeText={setRazorpayOrderId}
-              autoCapitalize="none"
-              maxLength={50}
-            />
-
-            <TouchableOpacity
-              style={[styles.confirmBtn, { backgroundColor: '#0284C7', marginTop: 20 }]}
-              onPress={handleProcessRazorpay}
-              disabled={actionLoading}
-            >
-              {actionLoading ? (
-                <ActivityIndicator color="#FFFFFF" />
-              ) : (
-                <Text style={[styles.confirmBtnText, { color: '#FFFFFF' }]}>Verify & Record Online Payment</Text>
+              <Text style={[styles.inputLabel, { color: colors.textPrimary }]}>Or Enter Razorpay Payment ID</Text>
+              <TextInput
+                style={[
+                  styles.textInput,
+                  {
+                    backgroundColor: colors.surfaceVariant,
+                    color: colors.textPrimary,
+                    borderColor: razorpayError ? colors.error : colors.border,
+                  },
+                ]}
+                placeholder="e.g. pay_29QQoUBi66xm2f"
+                placeholderTextColor={colors.textSecondary}
+                value={razorpayPaymentId}
+                onChangeText={text => {
+                  setRazorpayPaymentId(text);
+                  if (razorpayError) setRazorpayError(null);
+                }}
+                autoCapitalize="none"
+                maxLength={50}
+              />
+              {!!razorpayError && (
+                <Text style={[styles.inlineError, { color: colors.error }]}>{razorpayError}</Text>
               )}
-            </TouchableOpacity>
-          </View>
+
+              <View style={{ flexDirection: 'row', gap: 10, marginTop: 14 }}>
+                <TouchableOpacity
+                  style={[styles.outlineBtn, { borderColor: '#0284C7', flex: 1 }]}
+                  onPress={handleOpenRazorpayCheckout}
+                  disabled={actionLoading}
+                >
+                  <Text style={[styles.outlineBtnText, { color: '#0284C7' }]}>Razorpay App</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.confirmBtn, { backgroundColor: '#0284C7', flex: 1.2, marginTop: 0 }]}
+                  onPress={() => handleProcessRazorpay()}
+                  disabled={actionLoading}
+                >
+                  {actionLoading ? (
+                    <ActivityIndicator color="#FFFFFF" />
+                  ) : (
+                    <Text style={[styles.confirmBtnText, { color: '#FFFFFF', fontSize: 13 }]}>Verify by ID</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </View>
+          </ScrollView>
         </KeyboardAvoidingView>
       </Modal>
 
@@ -1267,6 +1801,369 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
                 <Text style={[styles.confirmBtnText, { color: '#FFFFFF' }]}>Confirm Cancel</Text>
               )}
             </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── Modal 6: Full-Screen Google Maps Navigation Modal ─────────────── */}
+      <Modal
+        visible={showInAppMapModal}
+        animationType="slide"
+        onRequestClose={() => setShowInAppMapModal(false)}
+        statusBarTranslucent
+      >
+        <View style={styles.fullScreenMapContainer}>
+          {/* Full-Screen Map Image Background with pointerEvents=none so touches never get blocked */}
+          <Image
+            source={{
+              uri:
+                directionsRoute?.staticMapUrl ||
+                (inAppMapTarget === 'store' ? storeStaticMapUrl : customerStaticMapUrl),
+            }}
+            style={styles.fullScreenMapImage}
+            pointerEvents="none"
+            resizeMode="cover"
+          />
+
+          {/* Loading Route Floating Badge */}
+          {isRouteLoading && (
+            <View style={[styles.fullMapLoadingPill, { top: Math.max(insets.top + 100, 110) }]}>
+              <ActivityIndicator size="small" color="#FFFFFF" style={{ marginRight: 8 }} />
+              <Text style={styles.fullMapLoadingPillText}>Calculating fastest road route...</Text>
+            </View>
+          )}
+
+          {/* Top Floating Card (Google Maps route bar) */}
+          <View
+            style={[
+              styles.topRouteCard,
+              {
+                backgroundColor: colors.card,
+                top: Math.max(insets.top + 16, 44),
+              },
+            ]}
+          >
+            {/* Obvious Close Button with wide hitSlop */}
+            <TouchableOpacity
+              style={[styles.topRouteCloseBtn, { backgroundColor: colors.surfaceVariant }]}
+              onPress={() => setShowInAppMapModal(false)}
+              hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="close" size={22} color={colors.textPrimary} />
+            </TouchableOpacity>
+
+            <View style={{ flex: 1, marginHorizontal: 8 }}>
+              {/* Origin Row */}
+              <View style={styles.topRouteRow}>
+                <View style={styles.originGpsDot} />
+                <Text style={[styles.topRouteOriginText, { color: colors.textPrimary }]} numberOfLines={1}>
+                  Your location
+                </Text>
+                <Text style={[styles.topRouteGpsSub, { color: colors.textSecondary }]}>
+                  (GPS Active)
+                </Text>
+              </View>
+
+              {/* Connecting vertical dots */}
+              <View style={styles.topRouteConnectorLine} />
+
+              {/* Destination Row */}
+              <View style={styles.topRouteRow}>
+                <Ionicons
+                  name="location"
+                  size={16}
+                  color={inAppMapTarget === 'store' ? '#15803D' : '#DC2626'}
+                  style={{ marginRight: 6 }}
+                />
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.topRouteDestTitle, { color: colors.textPrimary }]} numberOfLines={1}>
+                    {inAppMapTarget === 'store'
+                      ? currentOrder.storeName || 'LB Delivery Central Hub'
+                      : currentOrder.customerName || 'Customer Doorstep'}
+                  </Text>
+                  <Text style={[styles.topRouteDestAddress, { color: colors.textSecondary }]} numberOfLines={1}>
+                    {inAppMapTarget === 'store'
+                      ? currentOrder.storeAddress || 'Mathigiri Main Road, Hosur'
+                      : currentOrder.deliveryAddress}
+                  </Text>
+                </View>
+              </View>
+            </View>
+
+            <TouchableOpacity
+              style={[styles.topRouteRefreshBtn, { backgroundColor: colors.surfaceVariant }]}
+              onPress={() => fetchLiveRoute(inAppMapTarget)}
+              disabled={isRouteLoading}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              activeOpacity={0.7}
+            >
+              {isRouteLoading ? (
+                <ActivityIndicator size="small" color={colors.primary} />
+              ) : (
+                <Ionicons name="refresh" size={18} color={colors.primary} />
+              )}
+            </TouchableOpacity>
+          </View>
+
+          {/* Bottom Floating Navigation Sheet (Google Maps Style) */}
+          <View
+            style={[
+              styles.bottomNavSheet,
+              {
+                backgroundColor: colors.card,
+                paddingBottom: Math.max(insets.bottom, 16),
+              },
+            ]}
+          >
+            {/* Sheet Drag Handle */}
+            <View style={styles.bottomNavHandle} />
+
+            {/* Transport Mode Pills */}
+            <View style={styles.transportModeRow}>
+              <View style={[styles.transportModePill, styles.transportModePillActive]}>
+                <Ionicons name="car" size={14} color="#FFFFFF" style={{ marginRight: 5 }} />
+                <Text style={styles.transportModePillTextActive}>
+                  Drive • {directionsRoute?.duration || '15 mins'}
+                </Text>
+              </View>
+              <View style={[styles.transportModePill, { backgroundColor: colors.surfaceVariant }]}>
+                <Ionicons name="bicycle" size={14} color={colors.textSecondary} style={{ marginRight: 5 }} />
+                <Text style={[styles.transportModePillText, { color: colors.textSecondary }]}>
+                  Two-wheeler • {directionsRoute?.duration || '12 mins'}
+                </Text>
+              </View>
+            </View>
+
+            {/* Big ETA & Distance Header with Call and Open in Google Maps Buttons */}
+            <View style={styles.bottomNavEtaRow}>
+              <View style={{ flex: 1, marginRight: 8 }}>
+                <Text style={styles.bottomNavEtaTime}>
+                  {directionsRoute?.duration || '15 mins'}{' '}
+                  <Text style={styles.bottomNavEtaDistance}>
+                    ({directionsRoute?.distance || '5.7 km'})
+                  </Text>
+                </Text>
+                <Text style={[styles.bottomNavEtaSub, { color: colors.textSecondary }]}>
+                  Fastest route now • Light traffic
+                </Text>
+              </View>
+
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                {/* Call Button */}
+                <TouchableOpacity
+                  style={[
+                    styles.bottomNavIconBtn,
+                    { backgroundColor: inAppMapTarget === 'store' ? '#15803D' : '#0284C7' },
+                  ]}
+                  onPress={() => {
+                    if (inAppMapTarget === 'store') {
+                      Linking.openURL('tel:+919843012345').catch(() => {});
+                    } else {
+                      handleCallCustomer();
+                    }
+                  }}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="call" size={18} color="#FFFFFF" />
+                </TouchableOpacity>
+
+                {/* Google Maps External Voice Turn-by-Turn Button */}
+                <TouchableOpacity
+                  style={[styles.bottomNavIconBtn, { backgroundColor: colors.surfaceVariant, borderColor: colors.border, borderWidth: 1 }]}
+                  onPress={() => {
+                    if (inAppMapTarget === 'store') {
+                      handleLaunchExternalNavigation(storeLat, storeLon);
+                    } else {
+                      handleLaunchExternalNavigation(customerLat, customerLon);
+                    }
+                  }}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="navigate" size={18} color={colors.primary} />
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {/* Turn-by-Turn Steps List */}
+            {directionsRoute?.steps && directionsRoute.steps.length > 0 && (
+              <View style={styles.bottomNavStepsWrapper}>
+                <View style={styles.bottomNavStepsHeader}>
+                  <Ionicons name="trail-sign-outline" size={14} color={colors.primary} style={{ marginRight: 5 }} />
+                  <Text style={[styles.bottomNavStepsTitle, { color: colors.textPrimary }]}>
+                    Directions ({directionsRoute.steps.length} steps)
+                  </Text>
+                </View>
+                <ScrollView
+                  style={styles.bottomNavStepsScroll}
+                  nestedScrollEnabled
+                  showsVerticalScrollIndicator={false}
+                >
+                  {directionsRoute.steps.map((step, sIdx) => (
+                    <View
+                      key={sIdx}
+                      style={[styles.bottomNavStepItem, { borderBottomColor: colors.border }]}
+                    >
+                      <View style={[styles.bottomNavStepBadge, { backgroundColor: `${colors.primary}18` }]}>
+                        <Text style={[styles.bottomNavStepBadgeText, { color: colors.primary }]}>{sIdx + 1}</Text>
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.bottomNavStepText, { color: colors.textPrimary }]}>
+                          {step.instruction}
+                        </Text>
+                      </View>
+                      {!!step.distance && (
+                        <Text style={[styles.bottomNavStepDist, { color: colors.textSecondary }]}>
+                          {step.distance}
+                        </Text>
+                      )}
+                    </View>
+                  ))}
+                </ScrollView>
+              </View>
+            )}
+
+            {/* Direct Workflow Action Row inside Map Modal */}
+            <View style={styles.modalActionButtonsRow}>
+              {/* Close Button */}
+              <TouchableOpacity
+                style={[
+                  styles.modalCloseMapBtn,
+                  { backgroundColor: colors.surfaceVariant, borderColor: colors.border },
+                ]}
+                onPress={() => setShowInAppMapModal(false)}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="close" size={18} color={colors.textPrimary} style={{ marginRight: 4 }} />
+                <Text style={[styles.modalCloseMapBtnText, { color: colors.textPrimary }]}>
+                  Close Map
+                </Text>
+              </TouchableOpacity>
+
+              {/* Order Workflow Action Button directly inside Modal */}
+              {currentOrder.status === 'unassigned' && (
+                <TouchableOpacity
+                  style={[styles.modalPrimaryActionBtn, { backgroundColor: colors.primary }]}
+                  onPress={() => {
+                    setShowInAppMapModal(false);
+                    handleAcceptOrder();
+                  }}
+                  disabled={actionLoading}
+                  activeOpacity={0.8}
+                >
+                  {actionLoading ? (
+                    <ActivityIndicator color={colors.onPrimary} size="small" />
+                  ) : (
+                    <>
+                      <Ionicons name="checkmark-circle" size={18} color={colors.onPrimary} style={{ marginRight: 6 }} />
+                      <Text style={[styles.modalPrimaryActionBtnText, { color: colors.onPrimary }]}>
+                        Accept Order
+                      </Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              )}
+
+              {currentOrder.status === 'assigned' && (
+                <TouchableOpacity
+                  style={[styles.modalPrimaryActionBtn, { backgroundColor: colors.primary }]}
+                  onPress={() => {
+                    setShowInAppMapModal(false);
+                    handleArrivedStore();
+                  }}
+                  disabled={actionLoading}
+                  activeOpacity={0.8}
+                >
+                  {actionLoading ? (
+                    <ActivityIndicator color={colors.onPrimary} size="small" />
+                  ) : (
+                    <>
+                      <Ionicons name="business" size={18} color={colors.onPrimary} style={{ marginRight: 6 }} />
+                      <Text style={[styles.modalPrimaryActionBtnText, { color: colors.onPrimary }]}>
+                        Arrived at Store
+                      </Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              )}
+
+              {currentOrder.status === 'arrived_store' && (
+                <TouchableOpacity
+                  style={[styles.modalPrimaryActionBtn, { backgroundColor: colors.primary }]}
+                  onPress={() => {
+                    setShowInAppMapModal(false);
+                    handlePickedUp();
+                  }}
+                  disabled={actionLoading}
+                  activeOpacity={0.8}
+                >
+                  {actionLoading ? (
+                    <ActivityIndicator color={colors.onPrimary} size="small" />
+                  ) : (
+                    <>
+                      <Ionicons name="cube" size={18} color={colors.onPrimary} style={{ marginRight: 6 }} />
+                      <Text style={[styles.modalPrimaryActionBtnText, { color: colors.onPrimary }]}>
+                        Confirm Picked Up
+                      </Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              )}
+
+              {currentOrder.status === 'in_transit' && (
+                <TouchableOpacity
+                  style={[styles.modalPrimaryActionBtn, { backgroundColor: colors.primary }]}
+                  onPress={() => {
+                    setShowInAppMapModal(false);
+                    handleArrivedCustomer();
+                  }}
+                  disabled={actionLoading}
+                  activeOpacity={0.8}
+                >
+                  {actionLoading ? (
+                    <ActivityIndicator color={colors.onPrimary} size="small" />
+                  ) : (
+                    <>
+                      <Ionicons name="location" size={18} color={colors.onPrimary} style={{ marginRight: 6 }} />
+                      <Text style={[styles.modalPrimaryActionBtnText, { color: colors.onPrimary }]}>
+                        Arrived Customer
+                      </Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              )}
+
+              {currentOrder.status === 'arrived_customer' && (
+                <TouchableOpacity
+                  style={[styles.modalPrimaryActionBtn, { backgroundColor: colors.primary }]}
+                  onPress={() => {
+                    setShowInAppMapModal(false);
+                    setShowDeliverModal(true);
+                  }}
+                  disabled={actionLoading}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="shield-checkmark" size={18} color={colors.onPrimary} style={{ marginRight: 6 }} />
+                  <Text style={[styles.modalPrimaryActionBtnText, { color: colors.onPrimary }]}>
+                    Deliver Order (OTP)
+                  </Text>
+                </TouchableOpacity>
+              )}
+
+              {(currentOrder.status === 'delivered' || currentOrder.status === 'cancelled') && (
+                <TouchableOpacity
+                  style={[styles.modalPrimaryActionBtn, { backgroundColor: colors.surfaceVariant }]}
+                  onPress={() => setShowInAppMapModal(false)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={[styles.modalPrimaryActionBtnText, { color: colors.textPrimary }]}>
+                    Done
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
           </View>
         </View>
       </Modal>
@@ -1613,5 +2510,417 @@ const styles = StyleSheet.create({
   checkStatusBtnText: {
     fontSize: 11,
     fontWeight: '700',
+  },
+  tabHeaderContainer: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 16,
+    width: '100%',
+  },
+  tabBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  tabBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    marginLeft: 6,
+  },
+  qrCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 14,
+    alignItems: 'center',
+    marginVertical: 10,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    width: '100%',
+  },
+  qrAmountBadge: {
+    backgroundColor: '#F0FDF4',
+    borderWidth: 1,
+    borderColor: '#86EFAC',
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    marginBottom: 4,
+  },
+  qrAmountText: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#166534',
+  },
+  qrImage: {
+    width: 200,
+    height: 200,
+    borderRadius: 8,
+  },
+  qrSubText: {
+    fontSize: 11.5,
+    textAlign: 'center',
+    marginTop: 8,
+    color: '#64748B',
+    fontWeight: '600',
+  },
+  mapPreviewCard: {
+    width: '100%',
+    height: 125,
+    borderRadius: 10,
+    overflow: 'hidden',
+    marginTop: 10,
+    position: 'relative',
+    backgroundColor: '#E2E8F0',
+  },
+  mapPreviewImage: {
+    width: '100%',
+    height: '100%',
+  },
+  mapOverlayBadge: {
+    position: 'absolute',
+    bottom: 6,
+    left: 8,
+    backgroundColor: 'rgba(0, 0, 0, 0.72)',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  mapOverlayBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 10.5,
+    fontWeight: '700',
+  },
+  routeMetricChipRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 6,
+  },
+  routeMetricChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  routeMetricChipText: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  // Clean location card styles
+  quickMetricRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderRadius: 10,
+    marginTop: 10,
+  },
+  quickMetricItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  quickMetricText: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  quickMetricGpsText: {
+    fontSize: 11.5,
+    fontWeight: '600',
+    marginLeft: 6,
+  },
+  inAppMapGpsDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#16A34A',
+  },
+  cardActionRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 12,
+  },
+  cardActionBtnSecondary: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 11,
+    borderRadius: 10,
+    borderWidth: 1,
+  },
+  cardActionBtnSecondaryText: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  cardActionBtnPrimary: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 11,
+    borderRadius: 10,
+  },
+  cardActionBtnPrimaryText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+
+  // Full-Screen Google Maps Navigation Modal styles
+  fullScreenMapContainer: {
+    flex: 1,
+    backgroundColor: '#0F172A',
+    position: 'relative',
+  },
+  fullScreenMapImage: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    width: '100%',
+    height: '100%',
+  },
+  fullMapLoadingPill: {
+    position: 'absolute',
+    alignSelf: 'center',
+    backgroundColor: 'rgba(15, 23, 42, 0.88)',
+    paddingHorizontal: 16,
+    paddingVertical: 9,
+    borderRadius: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    zIndex: 50,
+    elevation: 8,
+  },
+  fullMapLoadingPillText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  topRouteCard: {
+    position: 'absolute',
+    left: 14,
+    right: 14,
+    borderRadius: 16,
+    padding: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    zIndex: 40,
+    elevation: 8,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.18,
+    shadowRadius: 10,
+  },
+  topRouteCloseBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  topRouteRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  originGpsDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#2563EB',
+    marginRight: 8,
+    marginLeft: 3,
+  },
+  topRouteOriginText: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  topRouteGpsSub: {
+    fontSize: 11,
+    marginLeft: 6,
+  },
+  topRouteConnectorLine: {
+    width: 2,
+    height: 12,
+    backgroundColor: '#94A3B8',
+    marginLeft: 7,
+    marginVertical: 2,
+  },
+  topRouteDestTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  topRouteDestAddress: {
+    fontSize: 11,
+    marginTop: 1,
+  },
+  topRouteRefreshBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 6,
+  },
+  bottomNavSheet: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    zIndex: 40,
+    elevation: 12,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.18,
+    shadowRadius: 12,
+    maxHeight: '52%',
+  },
+  bottomNavHandle: {
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#CBD5E1',
+    alignSelf: 'center',
+    marginBottom: 10,
+  },
+  transportModeRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 8,
+  },
+  transportModePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+  },
+  transportModePillActive: {
+    backgroundColor: '#0F766E',
+  },
+  transportModePillText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  transportModePillTextActive: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  bottomNavEtaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 6,
+  },
+  bottomNavEtaTime: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#15803D',
+  },
+  bottomNavEtaDistance: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#475569',
+  },
+  bottomNavEtaSub: {
+    fontSize: 12,
+    marginTop: 2,
+  },
+  bottomNavIconBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 3,
+  },
+  bottomNavStepsWrapper: {
+    marginTop: 8,
+    marginBottom: 8,
+  },
+  bottomNavStepsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  bottomNavStepsTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  bottomNavStepsScroll: {
+    maxHeight: 110,
+  },
+  bottomNavStepItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 6,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  bottomNavStepBadge: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 8,
+  },
+  bottomNavStepBadgeText: {
+    fontSize: 10.5,
+    fontWeight: '800',
+  },
+  bottomNavStepText: {
+    fontSize: 11.5,
+    lineHeight: 15,
+  },
+  bottomNavStepDist: {
+    fontSize: 11,
+    fontWeight: '600',
+    marginLeft: 8,
+  },
+  modalActionButtonsRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 8,
+  },
+  modalCloseMapBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 13,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  modalCloseMapBtnText: {
+    fontSize: 13.5,
+    fontWeight: '700',
+  },
+  modalPrimaryActionBtn: {
+    flex: 1.6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 13,
+    borderRadius: 12,
+    elevation: 3,
+  },
+  modalPrimaryActionBtnText: {
+    fontSize: 14,
+    fontWeight: '800',
   },
 });

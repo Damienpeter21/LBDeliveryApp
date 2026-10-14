@@ -203,9 +203,104 @@ export const mapDeliveryPickingToOrder = (
     [raw.street, raw.city, raw.zip_code].filter(Boolean).join(', ') ||
     'Hosur, Tamil Nadu';
 
-  const paymentMode =
-    raw.payment_mode ||
-    (raw.is_cod || raw.payment_method === 'cod' ? 'Cash on Delivery (COD)' : 'Online Paid');
+  const rawCodFlag =
+    raw.is_cod !== undefined
+      ? raw.is_cod
+      : raw.cod !== undefined
+      ? raw.cod
+      : undefined;
+
+  const rawPaymentModeStr =
+    typeof raw.payment_mode === 'string'
+      ? raw.payment_mode
+      : typeof raw.payment_method === 'string'
+      ? raw.payment_method
+      : '';
+
+  const rawClientRefStr =
+    typeof raw.client_order_ref === 'string'
+      ? raw.client_order_ref
+      : typeof raw.clientOrderRef === 'string'
+      ? raw.clientOrderRef
+      : '';
+
+  // Determine isCod authoritatively: handles boolean true/false, numeric 1/0,
+  // string "true"/"false", payment mode string, client_order_ref, and defaults to COD (true)
+  // so delivery drivers are never misdirected into skipping cash collection.
+  let isCod: boolean;
+  if (
+    rawCodFlag === true ||
+    rawCodFlag === 1 ||
+    rawCodFlag === 'true' ||
+    rawCodFlag === 'True' ||
+    rawCodFlag === 't' ||
+    rawCodFlag === '1'
+  ) {
+    isCod = true;
+  } else if (
+    rawCodFlag === false ||
+    rawCodFlag === 0 ||
+    rawCodFlag === 'false' ||
+    rawCodFlag === 'False' ||
+    rawCodFlag === 'f' ||
+    rawCodFlag === '0'
+  ) {
+    isCod = false;
+  } else if (rawPaymentModeStr) {
+    const lower = rawPaymentModeStr.toLowerCase();
+    if (lower.includes('cash') || lower.includes('cod')) {
+      isCod = true;
+    } else if (
+      lower.includes('online') ||
+      lower.includes('prepaid') ||
+      lower.includes('upi') ||
+      lower.includes('card') ||
+      lower.includes('razorpay') ||
+      lower.includes('netbanking')
+    ) {
+      isCod = false;
+    } else {
+      isCod = true;
+    }
+  } else if (rawClientRefStr) {
+    const lowerRef = rawClientRefStr.toLowerCase();
+    if (lowerRef.includes('cash') || lowerRef.includes('cod')) {
+      isCod = true;
+    } else if (
+      lowerRef.includes('online') ||
+      lowerRef.includes('prepaid') ||
+      lowerRef.includes('upi') ||
+      lowerRef.includes('card') ||
+      lowerRef.includes('rzp')
+    ) {
+      isCod = false;
+    } else {
+      isCod = true;
+    }
+  } else if (Number(raw.amount_paid || 0) > 0) {
+    isCod = false;
+  } else {
+    // Default to Cash on Delivery for delivery partner orders when payment is not explicitly online
+    isCod = true;
+  }
+
+  // Authoritative paymentMode string matching isCod
+  const paymentMode = isCod
+    ? (rawPaymentModeStr &&
+      (rawPaymentModeStr.toLowerCase().includes('cash') ||
+        rawPaymentModeStr.toLowerCase().includes('cod'))
+        ? rawPaymentModeStr
+        : rawClientRefStr &&
+          (rawClientRefStr.toLowerCase().includes('cash') ||
+            rawClientRefStr.toLowerCase().includes('cod'))
+        ? rawClientRefStr
+        : 'Cash on Delivery (COD)')
+    : (rawPaymentModeStr || rawClientRefStr || 'Online Paid');
+
+  // Authoritative paymentStatus
+  const paymentStatus =
+    raw.payment_status ||
+    (isCod ? 'pending' : 'paid');
 
   return {
     id,
@@ -227,13 +322,25 @@ export const mapDeliveryPickingToOrder = (
     totalAmount,
     savings: 0,
     paymentMode,
-    paymentStatus: raw.payment_status || (raw.is_cod ? 'pending' : 'paid'),
-    isCod: raw.is_cod ?? (paymentMode.toLowerCase().includes('cash') || paymentMode.toLowerCase().includes('cod')),
+    paymentStatus,
+    isCod,
     deliveryAddress,
     customerName,
     customerPhone,
-    storeName: raw.store_name || 'LB Delivery Central Hub',
-    storeAddress: raw.store_address || 'Mathigiri Main Road, Hosur',
+    storeName:
+      raw.store_name ||
+      raw.warehouse_name ||
+      raw.hub_name ||
+      raw.location_name ||
+      (Array.isArray(raw.picking_type_id) ? raw.picking_type_id[1] : undefined) ||
+      raw.source_location_name ||
+      'LB Delivery Central Hub',
+    storeAddress:
+      raw.store_address ||
+      raw.warehouse_address ||
+      raw.hub_address ||
+      raw.source_location_address ||
+      'Mathigiri Main Road, Hosur',
     eta: raw.eta || '15-20 mins',
     deliveryOtp: raw.delivery_otp ? String(raw.delivery_otp) : undefined,
     cancelReason: raw.cancel_reason,
@@ -241,8 +348,16 @@ export const mapDeliveryPickingToOrder = (
     longitude: raw.longitude,
     customerLatitude: raw.customer_latitude || raw.latitude,
     customerLongitude: raw.customer_longitude || raw.longitude,
-    storeLatitude: raw.store_latitude,
-    storeLongitude: raw.store_longitude,
+    storeLatitude:
+      raw.store_latitude ||
+      raw.warehouse_latitude ||
+      raw.hub_latitude ||
+      raw.source_location_latitude,
+    storeLongitude:
+      raw.store_longitude ||
+      raw.warehouse_longitude ||
+      raw.hub_longitude ||
+      raw.source_location_longitude,
   };
 };
 

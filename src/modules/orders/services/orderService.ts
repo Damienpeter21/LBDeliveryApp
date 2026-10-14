@@ -71,6 +71,8 @@ export class OrderService {
               'partner_id',
               'delivery_otp',
               'date_done',
+              'sale_id',
+              'carrier_price',
             ],
             limit: 50,
           },
@@ -78,10 +80,90 @@ export class OrderService {
         const rpcList = Array.isArray(rpcRes) ? rpcRes : rpcRes?.result;
         if (Array.isArray(rpcList) && rpcList.length > 0) {
           const existingIds = new Set(orders.map(o => o.pickingId || Number(o.id)));
-          for (const item of rpcList) {
-            const pId = Number(item.id);
-            if (!existingIds.has(pId)) {
-              orders.push(mapDeliveryPickingToOrder(item));
+          const pickingsToEnrich = rpcList.filter(item => !existingIds.has(Number(item.id)));
+
+          if (pickingsToEnrich.length > 0) {
+            // Collect unique sale order IDs
+            const saleIds = Array.from(
+              new Set(
+                pickingsToEnrich
+                  .map(p => (Array.isArray(p.sale_id) ? p.sale_id[0] : p.sale_id))
+                  .filter(Boolean),
+              ),
+            );
+
+            // Batch-read sale orders for accurate amount_total and payment method
+            const saleOrderMap = new Map<number, any>();
+            if (saleIds.length > 0) {
+              try {
+                const soRes: any = await callOdooRpc(
+                  'sale.order',
+                  'read',
+                  [saleIds],
+                  {
+                    fields: [
+                      'id',
+                      'name',
+                      'amount_total',
+                      'amount_paid',
+                      'client_order_ref',
+                      'partner_id',
+                    ],
+                  },
+                );
+                const soList = Array.isArray(soRes) ? soRes : soRes?.result;
+                if (Array.isArray(soList)) {
+                  for (const so of soList) {
+                    saleOrderMap.set(Number(so.id), so);
+                  }
+                }
+              } catch (_) {}
+            }
+
+            for (const item of pickingsToEnrich) {
+              const pId = Number(item.id);
+              const saleId = Array.isArray(item.sale_id) ? item.sale_id[0] : item.sale_id;
+              const so = saleId ? saleOrderMap.get(Number(saleId)) : null;
+
+              let enrichedItem = { ...item };
+              if (so) {
+                // 1. First check if the picking or sale order carries an explicit COD indicator.
+                //    In Odoo, client_order_ref stores 'COD' vs 'UPI: pay_...' for online orders.
+                const pickingHasExplicitCod =
+                  item.is_cod === true ||
+                  item.is_cod === 1 ||
+                  item.is_cod === 'true' ||
+                  item.is_cod === 'True' ||
+                  (typeof item.payment_mode === 'string' &&
+                    (item.payment_mode.toLowerCase().includes('cod') ||
+                      item.payment_mode.toLowerCase().includes('cash'))) ||
+                  (typeof item.client_order_ref === 'string' &&
+                    (item.client_order_ref.toLowerCase().includes('cod') ||
+                      item.client_order_ref.toLowerCase().includes('cash')));
+
+                const saleClientRef = typeof so.client_order_ref === 'string' ? so.client_order_ref.toLowerCase() : '';
+                const saleHasExplicitCod = saleClientRef.includes('cod') || saleClientRef.includes('cash');
+                const saleHasOnlineRef = saleClientRef.includes('upi') || saleClientRef.includes('online') || saleClientRef.includes('rzp');
+
+                const hasExplicitCod = pickingHasExplicitCod || saleHasExplicitCod;
+                const isPaidOnline = !hasExplicitCod && (saleHasOnlineRef || Number(so.amount_paid || 0) > 0);
+
+                enrichedItem = {
+                  ...enrichedItem,
+                  sale_order_id: so.id,
+                  amount_total: Number(so.amount_total || 0),
+                  client_order_ref: so.client_order_ref,
+                  is_cod: hasExplicitCod ? true : !isPaidOnline,
+                  payment_mode: hasExplicitCod
+                    ? (item.payment_mode || (saleHasExplicitCod ? 'Cash on Delivery (COD)' : so.client_order_ref) || 'Cash on Delivery (COD)')
+                    : isPaidOnline
+                    ? (so.client_order_ref || 'Online Paid')
+                    : 'Cash on Delivery (COD)',
+                  payment_status: isPaidOnline ? 'paid' : 'pending',
+                };
+              }
+
+              orders.push(mapDeliveryPickingToOrder(enrichedItem));
               existingIds.add(pId);
             }
           }
@@ -260,6 +342,8 @@ export class OrderService {
             'partner_id',
             'delivery_otp',
             'sale_id',
+            'location_id',      // source warehouse/hub location — used to resolve store name
+            'picking_type_id',  // picking type label contains the warehouse/store name
           ],
         },
       );
@@ -289,8 +373,9 @@ export class OrderService {
                 'id',
                 'name',
                 'amount_total',
+                'amount_paid',
+                'client_order_ref',
                 'order_line',
-                'delivery_status',
                 'invoice_status',
                 'partner_id',
               ],
@@ -338,16 +423,37 @@ export class OrderService {
         } catch (_) {}
       }
 
-      // Check live payment status if saleId exists
+      // Check live payment status if saleId exists.
+      // IMPORTANT: for COD orders, paymentStatus='paid' means cash was physically
+      // collected — it must NOT flip the payment badge to 'PAID (ONLINE)'.
+      // So we only update paymentStatus here for confirmed non-COD (online) orders.
       let paymentStatus = baseOrder?.paymentStatus || 'pending';
       let isPaid = false;
+
+      // Determine if this order is COD using client_order_ref (COD vs UPI) or baseOrder
+      const soClientRef = typeof saleOrder?.client_order_ref === 'string' ? saleOrder.client_order_ref.toLowerCase() : '';
+      const soHasCod = soClientRef.includes('cod') || soClientRef.includes('cash');
+      const soHasOnline = soClientRef.includes('upi') || soClientRef.includes('online') || soClientRef.includes('rzp') || Number(saleOrder?.amount_paid || 0) > 0;
+
+      const resolvedIsCod: boolean =
+        soHasCod
+          ? true
+          : soHasOnline
+          ? false
+          : (baseOrder?.isCod ?? true);
+
       if (saleId) {
         try {
           const payRes = await DeliveryApiService.checkPaymentStatus(Number(saleId));
           const pData = payRes?.result !== undefined ? payRes.result : payRes;
           if (pData?.is_paid || pData?.payment_state === 'paid' || pData?.payment_status === 'paid') {
             isPaid = true;
-            paymentStatus = 'paid';
+            // Only mark paymentStatus as 'paid' for online orders.
+            // For COD orders the badge is driven by isCashCollected in the UI,
+            // not by paymentStatus, so we preserve 'pending' to avoid the wrong badge.
+            if (resolvedIsCod === false) {
+              paymentStatus = 'paid';
+            }
           }
         } catch (_) {}
       }
@@ -396,6 +502,12 @@ export class OrderService {
           [customerPartner?.street, customerPartner?.city, customerPartner?.zip]
             .filter(Boolean)
             .join(', ') || baseOrder?.deliveryAddress,
+        // Carry forward store location fields from baseOrder so they are not lost
+        // when the stock.picking read doesn't return custom LB store fields
+        store_name: picking.store_name || baseOrder?.storeName,
+        store_address: picking.store_address || baseOrder?.storeAddress,
+        store_latitude: picking.store_latitude ?? baseOrder?.storeLatitude,
+        store_longitude: picking.store_longitude ?? baseOrder?.storeLongitude,
       });
 
       return {
@@ -405,7 +517,15 @@ export class OrderService {
         items: items.length > 0 ? items : (baseOrder?.items || mappedOrder.items),
         itemCount: items.length > 0 ? items.length : (baseOrder?.itemCount || mappedOrder.itemCount),
         paymentStatus,
-        isCod: baseOrder?.isCod ?? !isPaid,
+        // Preserve the original isCod flag — use resolvedIsCod (from sale.order) when
+        // available, otherwise fall back to baseOrder then mappedOrder.
+        // This ensures COD orders remain COD even after cash reconciliation is recorded.
+        isCod: resolvedIsCod !== undefined ? resolvedIsCod : (baseOrder?.isCod ?? mappedOrder.isCod),
+        // Preserve store location from baseOrder so Navigate button always works
+        storeName: mappedOrder.storeName || baseOrder?.storeName,
+        storeAddress: mappedOrder.storeAddress || baseOrder?.storeAddress,
+        storeLatitude: mappedOrder.storeLatitude ?? baseOrder?.storeLatitude,
+        storeLongitude: mappedOrder.storeLongitude ?? baseOrder?.storeLongitude,
       };
     } catch (err) {
       console.warn('Error fetching live order details:', err);

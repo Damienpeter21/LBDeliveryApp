@@ -56,6 +56,36 @@ describe('orderMapper unit tests', () => {
     expect(order.paymentStatus).toBe('pending');
   });
 
+  it('regression: is_cod=true wins even when payment_mode returns "Online" from API', () => {
+    // This is the exact bug scenario from the screenshot:
+    // Odoo sends is_cod: true but also payment_mode: "Online" (or "Prepaid").
+    // Before the fix, payment_mode was evaluated first via ||, making paymentMode="Online",
+    // and isCod (via ??) fell back to paymentMode.includes('cash') = false → showed PREPAID.
+    const conflictingPicking = {
+      ...basePicking,
+      is_cod: true,
+      payment_mode: 'Online', // Odoo bug: contradicts is_cod
+    };
+    const order = mapDeliveryPickingToOrder(conflictingPicking);
+
+    expect(order.isCod).toBe(true);                          // must honour is_cod flag
+    expect(order.paymentMode).toBe('Cash on Delivery (COD)'); // must resolve to COD
+    expect(order.paymentStatus).toBe('pending');
+  });
+
+  it('regression: is_cod=false correctly stays prepaid even when payment_mode is absent', () => {
+    const prepaidPicking = {
+      ...basePicking,
+      is_cod: false,
+      payment_mode: undefined,
+    };
+    const order = mapDeliveryPickingToOrder(prepaidPicking);
+
+    expect(order.isCod).toBe(false);
+    expect(order.paymentMode).toBe('Online Paid');
+    expect(order.paymentStatus).toBe('paid');
+  });
+
   it('handles fallback defaults when optional fields are missing', () => {
     const minimalPicking = {
       id: 202,
@@ -123,5 +153,57 @@ describe('orderMapper unit tests', () => {
       const activeOrder = mapDeliveryPickingToOrder(liveActivePicking);
       expect(activeOrder.status).toBe('assigned');
     });
+
+    it('correctly maps user exact COD picking payload with is_cod:true and payment_mode', () => {
+      const userPicking = {
+        id: 101,
+        name: 'WH/OUT/00101',
+        origin: 'S00042',
+        state: 'assigned',
+        scheduled_date: '2026-10-13 10:30:00',
+        delivery_app_status: 'unassigned',
+        delivery_driver_id: false,
+        partner_id: [55, 'Ravi Kumar'],
+        delivery_otp: '4821',
+        items: [],
+        amount_total: 850.0,
+        is_cod: true,
+        payment_mode: 'Cash on Delivery (COD)',
+        customer_name: 'Ravi Kumar',
+        customer_phone: '+91 98430 XXXXX',
+        delivery_address: '12 Gandhi St, Hosur',
+        latitude: 12.5683,
+        longitude: 77.8284,
+      };
+
+      const order = mapDeliveryPickingToOrder(userPicking);
+      expect(order.isCod).toBe(true);
+      expect(order.paymentMode).toBe('Cash on Delivery (COD)');
+      expect(order.paymentStatus).toBe('pending');
+      expect(order.totalAmount).toBe(850.0);
+      expect(order.customerName).toBe('Ravi Kumar');
+      expect(order.deliveryAddress).toBe('12 Gandhi St, Hosur');
+    });
+
+    it('correctly detects COD when is_cod is string "true" or numeric 1', () => {
+      const stringCod = mapDeliveryPickingToOrder({ id: 102, is_cod: 'true' as any });
+      expect(stringCod.isCod).toBe(true);
+      expect(stringCod.paymentStatus).toBe('pending');
+
+      const numericCod = mapDeliveryPickingToOrder({ id: 103, is_cod: 1 as any });
+      expect(numericCod.isCod).toBe(true);
+      expect(numericCod.paymentStatus).toBe('pending');
+    });
+
+    it('correctly detects COD from payment_mode string when is_cod is omitted', () => {
+      const codByMode = mapDeliveryPickingToOrder({
+        id: 104,
+        payment_mode: 'Cash on Delivery (COD)',
+      });
+      expect(codByMode.isCod).toBe(true);
+      expect(codByMode.paymentMode).toBe('Cash on Delivery (COD)');
+      expect(codByMode.paymentStatus).toBe('pending');
+    });
   });
 });
+

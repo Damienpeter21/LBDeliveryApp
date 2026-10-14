@@ -285,12 +285,14 @@ export const OrderCard: React.FC<OrderCardProps> = ({
                   color: order.isCod
                     ? '#D97706'
                     : '#16A34A',
-                  fontSize: !order.isCod && order.totalAmount === 0 ? 13 : 15,
+                  fontSize: order.totalAmount === 0 ? 13 : 15,
                 },
               ]}
             >
               {order.isCod
-                ? `₹${order.totalAmount.toFixed(2)}`
+                ? order.totalAmount > 0
+                  ? `₹${order.totalAmount.toFixed(2)}`
+                  : 'Cash on Delivery'
                 : order.totalAmount > 0
                 ? `₹${order.totalAmount.toFixed(2)}`
                 : 'Prepaid ✓'}

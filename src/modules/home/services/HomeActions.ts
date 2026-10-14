@@ -10,6 +10,8 @@ import { Order } from '../../orders/types';
 import { mapDeliveryPickingToOrder } from '../../orders/utils/orderMapper';
 import { OrderService } from '../../orders/services/orderService';
 
+import { callOdooRpc } from '../../../app/config';
+
 const extractPickingsArray = (res: any): any[] => {
   if (!res) return [];
   if (Array.isArray(res)) return res;
@@ -32,7 +34,53 @@ export class HomeActions {
     try {
       const res = await DeliveryApiService.getUnassignedOrders();
       const list = extractPickingsArray(res);
-      return list.map(item => mapDeliveryPickingToOrder(item, 'unassigned'));
+      if (list.length === 0) return [];
+
+      // Batch-fetch sale orders by origin name to get accurate amount_total, COD/online payment mode, and sale_order_id
+      const origins = list.map((item: any) => item.origin).filter(Boolean);
+      const saleMap = new Map<string, any>();
+      if (origins.length > 0) {
+        try {
+          const soRes: any = await callOdooRpc(
+            'sale.order',
+            'search_read',
+            [[['name', 'in', origins]]],
+            { fields: ['id', 'name', 'amount_total', 'amount_paid', 'client_order_ref', 'partner_id'] },
+          );
+          const soList = Array.isArray(soRes) ? soRes : soRes?.result;
+          if (Array.isArray(soList)) {
+            for (const so of soList) {
+              if (so.name) {
+                saleMap.set(so.name, so);
+              }
+            }
+          }
+        } catch (enrichErr) {
+          console.warn('HomeActions.getUnassignedOrders enrichment note:', enrichErr);
+        }
+      }
+
+      return list.map((item: any) => {
+        const so = item.origin ? saleMap.get(item.origin) : null;
+        let enriched = { ...item };
+        if (so) {
+          const clientRef = typeof so.client_order_ref === 'string' ? so.client_order_ref.toLowerCase() : '';
+          const isExplicitCod = clientRef.includes('cod') || clientRef.includes('cash');
+          const isPaidOnline = !isExplicitCod && (Number(so.amount_paid || 0) > 0 || clientRef.includes('upi') || clientRef.includes('online'));
+          const isCod = isExplicitCod || !isPaidOnline;
+
+          enriched = {
+            ...enriched,
+            sale_order_id: so.id,
+            amount_total: Number(so.amount_total || enriched.amount_total || 0),
+            is_cod: isCod,
+            payment_mode: isCod ? 'Cash on Delivery (COD)' : (so.client_order_ref || 'Online Paid'),
+            payment_status: isCod ? 'pending' : 'paid',
+            client_order_ref: so.client_order_ref,
+          };
+        }
+        return mapDeliveryPickingToOrder(enriched, 'unassigned');
+      });
     } catch (error) {
       console.warn('HomeActions.getUnassignedOrders error:', error);
       return [];

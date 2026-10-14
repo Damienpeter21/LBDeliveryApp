@@ -8,7 +8,7 @@ import axiosInstance from './axios/AxiosInstance';
 export const ODOO_CONFIG = {
   DB: 'home_delivery',
   ALT_DB: 'odoo18',
-  UID: 15,
+  UID: 2,
   PASSWORD: '1234',
   LOGIN: 'karthik.delivery@example.com',
   API_KEY: 'f0cdb9807be1d3368fa9b949004ada4e02fca716',

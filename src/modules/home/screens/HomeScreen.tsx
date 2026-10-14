@@ -56,8 +56,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   const [refreshing, setRefreshing] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
 
-  // Fully online application: delivery partner defaults to Online
-  const [isCheckedIn, setIsCheckedIn] = useState(true);
+  // Start as NOT checked in — driver must explicitly check in via the API/button
+  const [isCheckedIn, setIsCheckedIn] = useState(false);
   const [unassignedOrders, setUnassignedOrders] = useState<Order[]>([]);
   const [activeDeliveries, setActiveDeliveries] = useState<Order[]>([]);
   const [pendingCashTotal, setPendingCashTotal] = useState<number>(0);
@@ -68,12 +68,13 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
     else setLoading(true);
 
     try {
-      // Check stored shift state: default to ONLINE (true) for fully online app
+      // Check stored shift state — only mark as checked-in if explicitly saved as 'true'
+      // (null / undefined / 'false' → not checked in, so driver must start shift first)
       const storedShift = await storage.getString(SHIFT_STORAGE_KEY);
-      if (storedShift === 'false') {
-        setIsCheckedIn(false);
-      } else {
+      if (storedShift === 'true') {
         setIsCheckedIn(true);
+      } else {
+        setIsCheckedIn(false);
       }
 
       const [newOrders, active, attendance, cashHandover] = await Promise.all([
@@ -173,6 +174,15 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   };
 
   const handleAcceptOrder = async (order: Order) => {
+    // Guard: driver must be checked in before accepting any order
+    if (!isCheckedIn) {
+      showStatusModal({
+        type: 'error',
+        title: 'Check-In Required',
+        message: 'Please start your shift by tapping "Start Shift" before accepting orders.',
+      });
+      return;
+    }
     const pickingId = order.pickingId || Number(order.id);
     setActionLoading(true);
     try {
@@ -492,8 +502,10 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                 key={order.id}
                 order={order}
                 onTrackOrder={onNavigateToOrderDetails}
-                onAccept={handleAcceptOrder}
-                onReject={handleRejectOrder}
+                // Only pass Accept/Reject handlers when driver is checked in
+                // Without check-in, the buttons won't render in OrderCard
+                onAccept={isCheckedIn ? handleAcceptOrder : undefined}
+                onReject={isCheckedIn ? handleRejectOrder : undefined}
               />
             ))
           )}

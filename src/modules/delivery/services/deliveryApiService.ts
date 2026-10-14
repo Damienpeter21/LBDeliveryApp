@@ -241,14 +241,21 @@ export class DeliveryApiService {
       driver_user_id: Number(driverUserId),
     });
 
-    // Synchronize scheduled_date to current date/time and record delivery_driver_id
+    // Synchronize scheduled_date to current date/time, delivery_app_status, and record delivery_driver_id
     // so Odoo's all_my_delivery query immediately returns it for today's deliveries
     try {
       const todayStr = new Date().toISOString().replace('T', ' ').slice(0, 19);
       await callOdooRpc(
         'stock.picking',
         'write',
-        [[Number(pickingId)], { scheduled_date: todayStr, delivery_driver_id: Number(driverUserId) }],
+        [
+          [Number(pickingId)],
+          {
+            scheduled_date: todayStr,
+            delivery_driver_id: Number(driverUserId),
+            delivery_app_status: 'accepted',
+          },
+        ],
         {},
       );
     } catch (_) { }
@@ -261,10 +268,27 @@ export class DeliveryApiService {
    * POST /api/delivery/picking/reject
    */
   static async rejectOrder(pickingId: number, driverUserId: number): Promise<any> {
-    return callDeliveryEndpoint('/api/delivery/picking/reject', {
+    const res = await callDeliveryEndpoint('/api/delivery/picking/reject', {
       picking_id: Number(pickingId),
       driver_user_id: Number(driverUserId),
     });
+
+    try {
+      await callOdooRpc(
+        'stock.picking',
+        'write',
+        [
+          [Number(pickingId)],
+          {
+            delivery_app_status: 'unassigned',
+            delivery_driver_id: false,
+          },
+        ],
+        {},
+      );
+    } catch (_) {}
+
+    return res;
   }
 
   /**
@@ -277,12 +301,23 @@ export class DeliveryApiService {
     latitude?: number,
     longitude?: number,
   ): Promise<any> {
-    return callDeliveryEndpoint('/api/delivery/picking/arrived-store', {
+    const res = await callDeliveryEndpoint('/api/delivery/picking/arrived-store', {
       picking_id: Number(pickingId),
       driver_user_id: Number(driverUserId),
       latitude: latitude ?? 12.5683,
       longitude: longitude ?? 77.8284,
     });
+
+    try {
+      await callOdooRpc(
+        'stock.picking',
+        'write',
+        [[Number(pickingId)], { delivery_app_status: 'arrived_store' }],
+        {},
+      );
+    } catch (_) {}
+
+    return res;
   }
 
   /**
@@ -290,10 +325,21 @@ export class DeliveryApiService {
    * POST /api/delivery/picking/picked-up
    */
   static async pickedUpFromStore(pickingId: number, driverUserId: number): Promise<any> {
-    return callDeliveryEndpoint('/api/delivery/picking/picked-up', {
+    const res = await callDeliveryEndpoint('/api/delivery/picking/picked-up', {
       picking_id: Number(pickingId),
       driver_user_id: Number(driverUserId),
     });
+
+    try {
+      await callOdooRpc(
+        'stock.picking',
+        'write',
+        [[Number(pickingId)], { delivery_app_status: 'picked_up' }],
+        {},
+      );
+    } catch (_) {}
+
+    return res;
   }
 
   /**
@@ -301,10 +347,21 @@ export class DeliveryApiService {
    * POST /api/delivery/picking/arrived-customer
    */
   static async arrivedCustomerLocation(pickingId: number, driverUserId: number): Promise<any> {
-    return callDeliveryEndpoint('/api/delivery/picking/arrived-customer', {
+    const res = await callDeliveryEndpoint('/api/delivery/picking/arrived-customer', {
       picking_id: Number(pickingId),
       driver_user_id: Number(driverUserId),
     });
+
+    try {
+      await callOdooRpc(
+        'stock.picking',
+        'write',
+        [[Number(pickingId)], { delivery_app_status: 'arrived_customer' }],
+        {},
+      );
+    } catch (_) {}
+
+    return res;
   }
 
   /**

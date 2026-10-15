@@ -12,4 +12,6 @@ export * from './common/AlertDialog';
 export * from './common/MapPreview';
 export * from './common/StatusModal';
 export * from './common/StatusModalContext';
+export * from './common/InteractiveGoogleMap';
+export * from './common/InteractiveMapPickerModal';
 export * from './common/toast';

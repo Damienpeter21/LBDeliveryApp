@@ -21,7 +21,12 @@ import {
 import Geolocation from '@react-native-community/geolocation';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from 'react-native-vector-icons/Ionicons';
-import { AppHeader, useStatusModal } from '../../../components';
+import {
+  AppHeader,
+  InteractiveGoogleMap,
+  InteractiveGoogleMapRef,
+  useStatusModal,
+} from '../../../components';
 import { API_SETTINGS } from '../../../app/config';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
@@ -159,29 +164,25 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
     currentOrder.status === 'preparing' ||
     currentOrder.status === 'arrived_store';
 
-  // Yelagiri Hills driver location default (Athanavur, Yelagiri Hills, Tirupattur - 635853)
-  const YELAGIRI_DRIVER_DEFAULT = {
-    latitude: 12.5856,
-    longitude: 78.6345,
-  };
-
   // In-App Map Navigation & Real-time Road Route State
   const [showInAppMapModal, setShowInAppMapModal] = useState<boolean>(false);
   const [inAppMapTarget, setInAppMapTarget] = useState<'store' | 'customer'>(
     isStorePickupPhase ? 'store' : 'customer',
   );
   const [deviceLocation, setDeviceLocation] = useState<{ latitude: number; longitude: number } | null>(
-    YELAGIRI_DRIVER_DEFAULT,
+    null,
   );
   const [directionsRoute, setDirectionsRoute] = useState<DirectionsRoute | null>(null);
   const [storeRoute, setStoreRoute] = useState<DirectionsRoute | null>(null);
   const [customerRoute, setCustomerRoute] = useState<DirectionsRoute | null>(null);
   const [isRouteLoading, setIsRouteLoading] = useState<boolean>(false);
   const [mapCenter, setMapCenter] = useState<{ latitude: number; longitude: number }>({
-    latitude: YELAGIRI_DRIVER_DEFAULT.latitude,
-    longitude: YELAGIRI_DRIVER_DEFAULT.longitude,
+    latitude: storeLat,
+    longitude: storeLon,
   });
   const [mapZoom, setMapZoom] = useState<number>(14);
+  const interactiveMapRef = useRef<InteractiveGoogleMapRef>(null);
+  const [showRouteStepsSheet, setShowRouteStepsSheet] = useState<boolean>(false);
 
   // Pre-load dynamic Razorpay UPI QR code for this order
   const loadRazorpayQr = async (orderAmount?: number) => {
@@ -205,6 +206,18 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
     } finally {
       setRazorpayQrLoading(false);
     }
+  };
+
+  // Normalize QR URL to ensure all devices display a clean, full-size 1:1 square QR code (never the shrunk vertical standee poster)
+  const getCleanQrImageUrl = (url?: string): string => {
+    if (!url) return '';
+    if (url.includes('rzp.io') || url.includes('/payments/qr_codes')) {
+      const amt = (currentOrder.totalAmount || 0).toFixed(2);
+      const rawId = (razorpayOrderId || '').replace(/^qr_/, '') || Date.now().toString().slice(-8);
+      const upi = `upi://pay?ver=01&mode=22&pa=razorpay@icici&pn=LB%20Mart&tr=RZP${rawId}qrv2&cu=INR&mc=5411&am=${amt}&tn=PaymentforOrder${encodeURIComponent(currentOrder.orderNumber || '')}`;
+      return `https://api.qrserver.com/v1/create-qr-code/?size=300x300&margin=10&data=${encodeURIComponent(upi)}`;
+    }
+    return url;
   };
 
   useEffect(() => {
@@ -340,77 +353,234 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
   };
 
   const isEmulatorLocation = (lat: number, lon: number): boolean => {
-    // 1. Android SDK emulator default simulated location (Mountain View, California ~37.42, -122.08)
+    // Android SDK emulator default simulated location (Mountain View, California ~37.42, -122.08)
     const isGoogleHQ = Math.abs(lat - 37.42) < 0.5 && Math.abs(lon - (-122.08)) < 0.5;
-    // 2. Or coordinate outside Indian subcontinent (Lat < 6° or > 38°, Lon < 68° or > 98°)
-    const isOutsideIndia = lat < 6.0 || lat > 38.0 || lon < 68.0 || lon > 98.0;
-    return isGoogleHQ || isOutsideIndia;
+    return isGoogleHQ;
+  };
+
+  // Dynamically resolve real-world device location via Google Geolocation API or IP geolocation
+  // when hardware GPS is unavailable, warming up, or running on an emulator without physical GPS
+  const fetchNetworkDeviceLocation = async (): Promise<{ latitude: number; longitude: number } | null> => {
+    // 1. Try Google Geolocation API using active Google Maps API key
+    if (googleMapKey) {
+      try {
+        const resp = await fetch(
+          `https://www.googleapis.com/geolocation/v1/geolocate?key=${googleMapKey}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}',
+          },
+        );
+        if (resp.ok) {
+          const data = await resp.json();
+          const lat = data?.location?.lat;
+          const lon = data?.location?.lng;
+          const accuracy = typeof data?.accuracy === 'number' ? data.accuracy : 0;
+          // Filter out wild cellular IP gateway locations (accuracy > 35km) that put the driver 100+ km away
+          if (
+            typeof lat === 'number' &&
+            typeof lon === 'number' &&
+            !isNaN(lat) &&
+            !isNaN(lon) &&
+            lat !== 0 &&
+            lon !== 0 &&
+            (!accuracy || accuracy <= 35000)
+          ) {
+            return { latitude: lat, longitude: lon };
+          }
+        }
+      } catch (e) {
+        console.warn('Google Geolocation API notice:', e);
+      }
+    }
+
+    // 2. Fallback to public IP geolocation service (dynamic, no hardcoding)
+    try {
+      const ipResp = await fetch('https://ipapi.co/json/');
+      if (ipResp.ok) {
+        const ipData = await ipResp.json();
+        const lat = parseFloat(ipData?.latitude);
+        const lon = parseFloat(ipData?.longitude);
+        if (
+          typeof lat === 'number' &&
+          typeof lon === 'number' &&
+          !isNaN(lat) &&
+          !isNaN(lon) &&
+          lat !== 0 &&
+          lon !== 0
+        ) {
+          return { latitude: lat, longitude: lon };
+        }
+      }
+    } catch (ipErr) {
+      console.warn('IP geolocation notice:', ipErr);
+    }
+
+    return null;
   };
 
   const requestCurrentDeviceLocation = async (): Promise<{ latitude: number; longitude: number }> => {
     if (Platform.OS === 'android') {
       try {
-        await PermissionsAndroid.requestMultiple([
+        const hasFine = await PermissionsAndroid.check(
           PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-          PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION,
-        ]);
+        );
+        if (!hasFine) {
+          await PermissionsAndroid.requestMultiple([
+            PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+            PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION,
+          ]);
+        }
       } catch (err) {
         console.warn('Location permission request error:', err);
       }
     }
 
-    return new Promise(resolve => {
-      // 1. First attempt fast network/cell-tower location (instant indoors on Android)
+    try {
+      Geolocation?.setRNConfiguration?.({
+        skipPermissionRequests: false,
+        authorizationLevel: 'whenInUse',
+        locationProvider: Platform.OS === 'android' ? 'playServices' : 'auto',
+      });
+    } catch (confErr) {
+      console.warn('Geolocation config warning:', confErr);
+    }
+
+    // Promise that queries native Geolocation (fast cached fused location, then active satellite/network)
+    const nativeCoords = await new Promise<{ latitude: number; longitude: number } | null>(resolve => {
+      let resolved = false;
+
+      const onGotPos = (pos: any) => {
+        if (resolved) return;
+        const lat = pos?.coords?.latitude;
+        const lon = pos?.coords?.longitude;
+        if (
+          typeof lat === 'number' &&
+          typeof lon === 'number' &&
+          !isNaN(lat) &&
+          !isNaN(lon) &&
+          lat !== 0 &&
+          lon !== 0 &&
+          !isEmulatorLocation(lat, lon)
+        ) {
+          resolved = true;
+          resolve({ latitude: lat, longitude: lon });
+        }
+      };
+
+      // 1. Fast Fused / Cached device location (maximumAge: 24 hours, timeout: 3000ms, enableHighAccuracy: false)
+      // When Play Services is active, getLastLocation() returns the exact physical device coordinate from memory immediately.
       Geolocation.getCurrentPosition(
-        pos => {
-          const rawLat = pos?.coords?.latitude;
-          const rawLon = pos?.coords?.longitude;
-          let coords = YELAGIRI_DRIVER_DEFAULT;
-
-          if (rawLat && rawLon && !isEmulatorLocation(rawLat, rawLon)) {
-            coords = {
-              latitude: rawLat,
-              longitude: rawLon,
-            };
-          }
-          setDeviceLocation(coords);
-          resolve(coords);
-        },
-        _lowErr => {
-          // 2. If network location unavailable, attempt high-accuracy GPS
+        onGotPos,
+        () => {
+          // 2. High-accuracy active GPS/network fix (timeout: 10000ms, enableHighAccuracy: true)
           Geolocation.getCurrentPosition(
-            posHigh => {
-              const rawLat = posHigh?.coords?.latitude;
-              const rawLon = posHigh?.coords?.longitude;
-              let coords = YELAGIRI_DRIVER_DEFAULT;
-
-              if (rawLat && rawLon && !isEmulatorLocation(rawLat, rawLon)) {
-                coords = {
-                  latitude: rawLat,
-                  longitude: rawLon,
-                };
-              }
-              setDeviceLocation(coords);
-              resolve(coords);
+            onGotPos,
+            () => {
+              // 3. Balanced network provider (timeout: 6000ms, enableHighAccuracy: false)
+              Geolocation.getCurrentPosition(
+                onGotPos,
+                () => {
+                  if (!resolved) {
+                    resolved = true;
+                    resolve(null);
+                  }
+                },
+                { enableHighAccuracy: false, timeout: 6000, maximumAge: 300000 },
+              );
             },
-            _highErr => {
-              // 3. Fallback to existing deviceLocation or Yelagiri Hills default (never Hosur)
-              const coords = deviceLocation || YELAGIRI_DRIVER_DEFAULT;
-              setDeviceLocation(coords);
-              resolve(coords);
-            },
-            { enableHighAccuracy: true, timeout: 6000, maximumAge: 15000 },
+            { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 },
           );
         },
-        { enableHighAccuracy: false, timeout: 4000, maximumAge: 30000 },
+        { enableHighAccuracy: false, timeout: 3000, maximumAge: 1000 * 60 * 60 * 24 },
       );
+
+      // Safety timeout
+      setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          resolve(null);
+        }
+      }, 12000);
     });
+
+    let finalCoords = nativeCoords;
+
+    // If native GPS did not return valid coordinates (e.g., emulator default location or indoor no fix),
+    // dynamically resolve real location via network Geolocation API (zero hardcoding!)
+    if (!finalCoords) {
+      finalCoords = await fetchNetworkDeviceLocation();
+    }
+
+    // Fallback if still null to previously known deviceLocation or destination coordinate
+    if (!finalCoords) {
+      if (deviceLocation) {
+        finalCoords = deviceLocation;
+      } else {
+        finalCoords = {
+          latitude: isStorePickupPhase ? storeLat : customerLat,
+          longitude: isStorePickupPhase ? storeLon : customerLon,
+        };
+      }
+    }
+
+    setDeviceLocation(finalCoords);
+    return finalCoords;
   };
 
-  const fetchLiveRoute = async (target: 'store' | 'customer') => {
+  // Continuous real-time GPS tracking subscriber
+  useEffect(() => {
+    let watchId: number | null = null;
+    try {
+      Geolocation?.setRNConfiguration?.({
+        skipPermissionRequests: false,
+        authorizationLevel: 'whenInUse',
+        locationProvider: Platform.OS === 'android' ? 'playServices' : 'auto',
+      });
+      watchId = Geolocation.watchPosition(
+        pos => {
+          const lat = pos?.coords?.latitude;
+          const lon = pos?.coords?.longitude;
+          if (
+            typeof lat === 'number' &&
+            typeof lon === 'number' &&
+            !isNaN(lat) &&
+            !isNaN(lon) &&
+            lat !== 0 &&
+            lon !== 0 &&
+            !isEmulatorLocation(lat, lon)
+          ) {
+            setDeviceLocation({ latitude: lat, longitude: lon });
+          }
+        },
+        err => {
+          console.log('Continuous Geolocation watch notice:', err);
+        },
+        {
+          enableHighAccuracy: true,
+          distanceFilter: 10,
+          interval: 5000,
+          fastestInterval: 2000,
+        },
+      );
+    } catch (e) {
+      console.warn('Geolocation watchPosition setup notice:', e);
+    }
+
+    return () => {
+      if (watchId !== null) {
+        try {
+          Geolocation.clearWatch(watchId);
+        } catch (_e) {}
+      }
+    };
+  }, []);
+
+  const fetchLiveRoute = async (target: 'store' | 'customer', customOrigin?: { latitude: number; longitude: number }) => {
     setIsRouteLoading(true);
     try {
-      const origin = await requestCurrentDeviceLocation();
+      const origin = customOrigin || deviceLocation || (await requestCurrentDeviceLocation());
       const destCoords =
         target === 'store'
           ? { latitude: storeLat, longitude: storeLon }
@@ -428,19 +598,18 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
         setCustomerRoute(route);
       }
 
-      // Only auto-fit span if destination is within local range (< 0.15 deg / ~15km)
+      // Auto-fit route camera between origin and destination
       const latDiff = Math.abs(origin.latitude - destCoords.latitude);
       const lonDiff = Math.abs(origin.longitude - destCoords.longitude);
       const maxDiff = Math.max(latDiff, lonDiff);
-      if (maxDiff < 0.15) {
-        const midLat = (origin.latitude + destCoords.latitude) / 2;
-        const midLon = (origin.longitude + destCoords.longitude) / 2;
-        setMapCenter({ latitude: midLat, longitude: midLon });
-        let autoZoom = 14;
-        if (maxDiff > 0.08) autoZoom = 12;
-        else if (maxDiff > 0.03) autoZoom = 13;
-        setMapZoom(autoZoom);
-      }
+      const midLat = (origin.latitude + destCoords.latitude) / 2;
+      const midLon = (origin.longitude + destCoords.longitude) / 2;
+      setMapCenter({ latitude: midLat, longitude: midLon });
+      let autoZoom = 14;
+      if (maxDiff > 0.15) autoZoom = 11;
+      else if (maxDiff > 0.08) autoZoom = 12;
+      else if (maxDiff > 0.03) autoZoom = 13;
+      setMapZoom(autoZoom);
     } catch (err) {
       console.warn('Could not calculate live directions:', err);
     } finally {
@@ -453,7 +622,13 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
     const target = isStorePickupPhase ? 'store' : 'customer';
     setInAppMapTarget(target);
     fetchLiveRoute(target);
-  }, [isStorePickupPhase, currentOrder.customerLatitude, currentOrder.storeLatitude]);
+  }, [
+    isStorePickupPhase,
+    currentOrder.customerLatitude,
+    currentOrder.storeLatitude,
+    deviceLocation?.latitude,
+    deviceLocation?.longitude,
+  ]);
 
   // Dynamic Google Static Map URL based on current live mapCenter and mapZoom
   const dynamicMapUrl = React.useMemo(() => {
@@ -466,18 +641,17 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
     const destLabel = inAppMapTarget === 'store' ? 'B' : 'P';
 
     // Two-Wheeler Vehicle Marker (V) for driver's live device location
-    const driverLoc = deviceLocation || YELAGIRI_DRIVER_DEFAULT;
-    const driverMarker = `&markers=color:blue%7Clabel:V%7C${driverLoc.latitude},${driverLoc.longitude}`;
+    const driverMarker = deviceLocation
+      ? `&markers=color:blue%7Clabel:V%7C${deviceLocation.latitude},${deviceLocation.longitude}`
+      : '';
     const destMarker = `&markers=color:${destColor}%7Clabel:${destLabel}%7C${destLat},${destLon}`;
     const polylineParam = directionsRoute?.polyline
       ? `&path=weight:5%7Ccolor:0x1E40AF%7Cenc:${encodeURIComponent(directionsRoute.polyline)}`
       : '';
 
-    return `https://maps.googleapis.com/maps/api/staticmap?center=${safeLat},${safeLon}&zoom=${mapZoom}&size=640x960&scale=2&maptype=roadmap&format=png&visual_refresh=true${driverMarker}${destMarker}${polylineParam}&key=${googleMapKey}`;
+    // If polyline or markers are present, omit center and zoom so Google Static Maps automatically frames all markers and the entire path
+    return `https://maps.googleapis.com/maps/api/staticmap?size=640x960&scale=2&maptype=roadmap&format=png&visual_refresh=true${driverMarker}${destMarker}${polylineParam}&key=${googleMapKey}`;
   }, [
-    mapCenter.latitude,
-    mapCenter.longitude,
-    mapZoom,
     inAppMapTarget,
     storeLat,
     storeLon,
@@ -493,8 +667,8 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
   const mapCenterRef = useRef(mapCenter);
   const mapZoomRef = useRef(mapZoom);
   const panStartCenter = useRef<{ latitude: number; longitude: number }>({
-    latitude: YELAGIRI_DRIVER_DEFAULT.latitude,
-    longitude: YELAGIRI_DRIVER_DEFAULT.longitude,
+    latitude: storeLat,
+    longitude: storeLon,
   });
   const initialPinchDistance = useRef<number | null>(null);
   const isPinching = useRef<boolean>(false);
@@ -522,10 +696,15 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
   };
 
   const handleRecenterMap = () => {
+    interactiveMapRef.current?.recenter();
     resetMapTransform();
-    // Center on driver's live device location (Athanavur, Yelagiri Hills)
-    const driverLoc = deviceLocation || YELAGIRI_DRIVER_DEFAULT;
-    setMapCenter(driverLoc);
+    // Center on driver's live device location or current destination
+    const centerLoc =
+      deviceLocation ||
+      (inAppMapTarget === 'store'
+        ? { latitude: storeLat, longitude: storeLon }
+        : { latitude: customerLat, longitude: customerLon });
+    setMapCenter(centerLoc);
     setMapZoom(15);
   };
 
@@ -629,10 +808,14 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
     // Open full-screen road map modal with interactive pan and zoom
     const target = isStorePickupPhase ? 'store' : 'customer';
     setInAppMapTarget(target);
-    // Center directly on driver's live GPS / device location (Athanavur, Yelagiri Hills)
-    const driverLoc = deviceLocation || YELAGIRI_DRIVER_DEFAULT;
-    setMapCenter(driverLoc);
-    setMapZoom(15);
+    // Center directly on driver's live GPS / device location or target
+    const centerLoc =
+      deviceLocation ||
+      (target === 'store'
+        ? { latitude: storeLat, longitude: storeLon }
+        : { latitude: customerLat, longitude: customerLon });
+    setMapCenter(centerLoc);
+    setMapZoom(14);
     resetMapTransform();
     setShowInAppMapModal(true);
     fetchLiveRoute(target);
@@ -2040,7 +2223,7 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
                       </View>
                     ) : razorpayQrUrl ? (
                       <Image
-                        source={{ uri: razorpayQrUrl }}
+                        source={{ uri: getCleanQrImageUrl(razorpayQrUrl) }}
                         style={styles.qrImage}
                         resizeMode="contain"
                       />
@@ -2200,7 +2383,7 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
                         </View>
                       ) : razorpayQrUrl ? (
                         <Image
-                          source={{ uri: razorpayQrUrl }}
+                          source={{ uri: getCleanQrImageUrl(razorpayQrUrl) }}
                           style={styles.qrImage}
                           resizeMode="contain"
                         />
@@ -2405,69 +2588,58 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
       <Modal
         visible={showInAppMapModal}
         animationType="slide"
-        onRequestClose={() => setShowInAppMapModal(false)}
+        onRequestClose={() => {
+          setShowRouteStepsSheet(false);
+          setShowInAppMapModal(false);
+        }}
         statusBarTranslucent
       >
         <View style={styles.fullScreenMapContainer}>
-          {/* Interactive Zoomable & Pannable Map Canvas */}
-          <View style={StyleSheet.absoluteFill} {...mapPanResponder.panHandlers}>
-            <Animated.View
-              style={[
-                styles.fullScreenMapImage,
-                {
-                  transform: [
-                    { translateX: mapPan.x },
-                    { translateY: mapPan.y },
-                  ],
-                },
-              ]}
-            >
-              <Image
-                source={{ uri: dynamicMapUrl }}
-                style={{ width: '100%', height: '100%' }}
-                resizeMode="cover"
-              />
-            </Animated.View>
-          </View>
-
-          {/* Floating Zoom & Recenter Controls (Google Maps Style) */}
-          <View
-            style={[
-              styles.floatingMapControls,
-              { bottom: Math.max(insets.bottom + 125, 145), backgroundColor: colors.card, borderColor: colors.border },
-            ]}
-          >
-            <TouchableOpacity
-              style={styles.mapControlBtn}
-              onPress={handleZoomIn}
-              activeOpacity={0.8}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            >
-              <Ionicons name="add" size={20} color={colors.textPrimary} />
-            </TouchableOpacity>
-
-            <View style={[styles.mapControlDivider, { backgroundColor: colors.border }]} />
-
-            <TouchableOpacity
-              style={styles.mapControlBtn}
-              onPress={handleZoomOut}
-              activeOpacity={0.8}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            >
-              <Ionicons name="remove" size={20} color={colors.textPrimary} />
-            </TouchableOpacity>
-
-            <View style={[styles.mapControlDivider, { backgroundColor: colors.border }]} />
-
-            <TouchableOpacity
-              style={styles.mapControlBtn}
-              onPress={handleRecenterMap}
-              activeOpacity={0.8}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            >
-              <Ionicons name="locate" size={18} color="#2563EB" />
-            </TouchableOpacity>
-          </View>
+          {/* True Interactive In-App Google Map with 2-Finger Pinch Zoom, Pan, Live Road Polyline, Traffic */}
+          <InteractiveGoogleMap
+            ref={interactiveMapRef}
+            mode="roadmap"
+            origin={
+              deviceLocation
+                ? {
+                    latitude: deviceLocation.latitude,
+                    longitude: deviceLocation.longitude,
+                    title: 'Driver Location (Two-Wheeler)',
+                  }
+                : undefined
+            }
+            destination={{
+              latitude: inAppMapTarget === 'store' ? storeLat : customerLat,
+              longitude: inAppMapTarget === 'store' ? storeLon : customerLon,
+              title:
+                inAppMapTarget === 'store'
+                  ? currentOrder.storeName || 'Store Hub'
+                  : currentOrder.customerName || 'Customer Doorstep',
+            }}
+            targetType={inAppMapTarget === 'store' ? 'store' : 'customer'}
+            initialZoom={mapZoom || 15}
+            showTrafficControls
+            showRecenterButton
+            showTypeToggle
+            routePolyline={directionsRoute?.polyline}
+            onRouteCalculated={route => {
+              const updatedRoute: DirectionsRoute = {
+                distance: route.distance,
+                distanceMeters: route.distanceMeters || 0,
+                duration: route.duration,
+                durationSeconds: route.durationSeconds || 0,
+                steps: route.steps || [],
+                staticMapUrl: directionsRoute?.staticMapUrl || '',
+              };
+              setDirectionsRoute(updatedRoute);
+              if (inAppMapTarget === 'store') {
+                setStoreRoute(updatedRoute);
+              } else {
+                setCustomerRoute(updatedRoute);
+              }
+            }}
+            interactive
+          />
 
           {/* Loading Route Floating Badge */}
           {isRouteLoading && (
@@ -2489,7 +2661,10 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
           >
             <TouchableOpacity
               style={[styles.topRouteCloseBtn, { backgroundColor: colors.surfaceVariant }]}
-              onPress={() => setShowInAppMapModal(false)}
+              onPress={() => {
+                setShowRouteStepsSheet(false);
+                setShowInAppMapModal(false);
+              }}
               hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}
               activeOpacity={0.7}
             >
@@ -2527,7 +2702,10 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
 
             <TouchableOpacity
               style={[styles.topRouteRefreshBtn, { backgroundColor: colors.surfaceVariant }]}
-              onPress={() => fetchLiveRoute(inAppMapTarget)}
+              onPress={() => {
+                fetchLiveRoute(inAppMapTarget);
+                interactiveMapRef.current?.recenter();
+              }}
               disabled={isRouteLoading}
               hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
               activeOpacity={0.7}
@@ -2577,7 +2755,92 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
             )}
           </View>
 
-          {/* Bottom Floating Navigation Dock (Sleek, Compact & Professional) */}
+          {/* Turn-by-Turn Driving Steps Sheet */}
+          {showRouteStepsSheet && (
+            <View
+              style={[
+                styles.turnStepsSheet,
+                {
+                  backgroundColor: colors.card,
+                  borderColor: colors.border,
+                  bottom: Math.max(insets.bottom + 130, 150),
+                },
+              ]}
+            >
+              <View style={styles.turnStepsHeader}>
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  <Ionicons name="navigate" size={16} color={colors.primary} style={{ marginRight: 6 }} />
+                  <Text style={[styles.turnStepsTitle, { color: colors.textPrimary }]}>
+                    Turn-by-Turn Directions ({directionsRoute?.steps?.length || 0} steps)
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  onPress={() => setShowRouteStepsSheet(false)}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Ionicons name="close" size={18} color={colors.textSecondary} />
+                </TouchableOpacity>
+              </View>
+
+              <ScrollView style={{ maxHeight: 200 }} showsVerticalScrollIndicator={false}>
+                {(directionsRoute?.steps || []).map((step, idx) => (
+                  <View key={idx} style={[styles.turnStepRow, { borderBottomColor: colors.border }]}>
+                    <View style={[styles.stepNumberBadge, { backgroundColor: `${colors.primary}15` }]}>
+                      <Text style={[styles.stepNumberText, { color: colors.primary }]}>{idx + 1}</Text>
+                    </View>
+                    <View style={{ flex: 1, marginHorizontal: 8 }}>
+                      <Text style={[styles.stepInstructionText, { color: colors.textPrimary }]}>
+                        {step.instruction}
+                      </Text>
+                      <Text style={[styles.stepDistanceText, { color: colors.textSecondary }]}>
+                        {step.distance} • {step.duration}
+                      </Text>
+                    </View>
+                  </View>
+                ))}
+              </ScrollView>
+            </View>
+          )}
+
+          {/* Floating Zoom In (+) / Zoom Out (-) Controls */}
+          <View
+            style={[
+              styles.floatingMapControls,
+              {
+                backgroundColor: colors.card,
+                borderColor: colors.border,
+                bottom: Math.max(insets.bottom + 120, 140),
+              },
+            ]}
+          >
+            <TouchableOpacity
+              style={styles.mapControlBtn}
+              onPress={() => {
+                interactiveMapRef.current?.zoomIn?.();
+                setMapZoom(prev => Math.min((prev || 15) + 1, 20));
+              }}
+              activeOpacity={0.7}
+              hitSlop={{ top: 8, bottom: 4, left: 8, right: 8 }}
+            >
+              <Ionicons name="add" size={20} color={colors.textPrimary} />
+            </TouchableOpacity>
+
+            <View style={[styles.mapControlDivider, { backgroundColor: colors.border }]} />
+
+            <TouchableOpacity
+              style={styles.mapControlBtn}
+              onPress={() => {
+                interactiveMapRef.current?.zoomOut?.();
+                setMapZoom(prev => Math.max((prev || 15) - 1, 5));
+              }}
+              activeOpacity={0.7}
+              hitSlop={{ top: 4, bottom: 8, left: 8, right: 8 }}
+            >
+              <Ionicons name="remove" size={20} color={colors.textPrimary} />
+            </TouchableOpacity>
+          </View>
+
+          {/* Bottom Floating Navigation Dock */}
           <View
             style={[
               styles.bottomNavDock,
@@ -2625,12 +2888,15 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
               </View>
             </View>
 
-            {/* Actions Row: Close Map & Call Customer/Store */}
+            {/* Actions Row: Close Map, Turn Steps & Call Customer/Store */}
             <View style={styles.bottomDockActionRow}>
               {/* Close Button */}
               <TouchableOpacity
                 style={[styles.bottomDockCloseBtn, { backgroundColor: colors.surfaceVariant, borderColor: colors.border }]}
-                onPress={() => setShowInAppMapModal(false)}
+                onPress={() => {
+                  setShowRouteStepsSheet(false);
+                  setShowInAppMapModal(false);
+                }}
                 activeOpacity={0.7}
                 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               >
@@ -2639,6 +2905,37 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
                   Close Map
                 </Text>
               </TouchableOpacity>
+
+              {/* Turn-by-Turn Steps Toggle Button */}
+              {Boolean(directionsRoute?.steps?.length) && (
+                <TouchableOpacity
+                  style={[
+                    styles.bottomDockStepsBtn,
+                    {
+                      backgroundColor: showRouteStepsSheet ? `${colors.primary}20` : colors.surfaceVariant,
+                      borderColor: showRouteStepsSheet ? colors.primary : colors.border,
+                    },
+                  ]}
+                  onPress={() => setShowRouteStepsSheet(prev => !prev)}
+                  activeOpacity={0.7}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Ionicons
+                    name="list-outline"
+                    size={17}
+                    color={showRouteStepsSheet ? colors.primary : colors.textPrimary}
+                    style={{ marginRight: 4 }}
+                  />
+                  <Text
+                    style={[
+                      styles.bottomDockStepsBtnText,
+                      { color: showRouteStepsSheet ? colors.primary : colors.textPrimary },
+                    ]}
+                  >
+                    Steps
+                  </Text>
+                </TouchableOpacity>
+              )}
 
               {/* Call Customer/Store Button */}
               <TouchableOpacity
@@ -3181,8 +3478,9 @@ const styles = StyleSheet.create({
     color: '#166534',
   },
   qrImage: {
-    width: 200,
-    height: 200,
+    width: 210,
+    height: 210,
+    aspectRatio: 1,
     borderRadius: 8,
   },
   qrSubText: {
@@ -3522,5 +3820,72 @@ const styles = StyleSheet.create({
   mapControlDivider: {
     height: 1,
     width: '100%',
+  },
+  bottomDockStepsBtn: {
+    height: 44,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+  },
+  bottomDockStepsBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  turnStepsSheet: {
+    position: 'absolute',
+    left: 14,
+    right: 14,
+    borderRadius: 16,
+    borderWidth: 1,
+    padding: 14,
+    zIndex: 60,
+    elevation: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+  },
+  turnStepsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+    paddingBottom: 6,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(0,0,0,0.1)',
+  },
+  turnStepsTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  turnStepRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    paddingVertical: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  stepNumberBadge: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 2,
+  },
+  stepNumberText: {
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  stepInstructionText: {
+    fontSize: 12.5,
+    fontWeight: '600',
+    lineHeight: 17,
+  },
+  stepDistanceText: {
+    fontSize: 11,
+    marginTop: 2,
   },
 });

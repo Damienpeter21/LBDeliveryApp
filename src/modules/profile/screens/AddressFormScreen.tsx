@@ -18,8 +18,17 @@ import DeviceInfo from 'react-native-device-info';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { API_SETTINGS, GOOGLE_SETTINGS } from '../../../app/config';
-import { AppHeader, MapPreview, useStatusModal } from '../../../components';
-import { useLocation, UserLocation } from '../../location';
+import {
+  AppHeader,
+  InteractiveMapPickerModal,
+  MapPreview,
+  useStatusModal,
+} from '../../../components';
+import {
+  reverseGeocodeCoordinates,
+  useLocation,
+  UserLocation,
+} from '../../location';
 import { useTheme } from '../../../theme';
 import { useAuth } from '../../auth';
 import { useAddress } from '../context/AddressContext';
@@ -264,6 +273,26 @@ export const AddressFormScreen: React.FC<AddressFormScreenProps> = ({
   });
 
   const [mapZoom, setMapZoom] = useState<number>(16);
+  const [showInteractiveMapPicker, setShowInteractiveMapPicker] = useState<boolean>(false);
+
+  const handleInteractiveLocationSelect = async (selected: {
+    latitude: number;
+    longitude: number;
+    address?: string;
+  }) => {
+    const newCoords = { latitude: selected.latitude, longitude: selected.longitude };
+    setCoords(newCoords);
+    setGpsDetected(true);
+
+    try {
+      const resolved = await reverseGeocodeCoordinates(newCoords);
+      if (resolved) {
+        bindLocationToFields(resolved as any);
+      }
+    } catch (err) {
+      console.warn('Geocoding error after map pick:', err);
+    }
+  };
 
   const handleZoomIn = () => {
     setMapZoom(prev => Math.min(prev + 1, 19));
@@ -429,8 +458,12 @@ export const AddressFormScreen: React.FC<AddressFormScreenProps> = ({
               },
             ]}
           >
-            {/* Map Canvas with Pin & Controls */}
-            <View style={[styles.mapCanvas, { backgroundColor: isDark ? '#1e293b' : '#e2e8f0' }]}>
+            {/* Map Canvas with Pin & Controls - Tap to Open Interactive Google Map */}
+            <TouchableOpacity
+              activeOpacity={0.95}
+              onPress={() => setShowInteractiveMapPicker(true)}
+              style={[styles.mapCanvas, { backgroundColor: isDark ? '#1e293b' : '#e2e8f0' }]}
+            >
               {/* Google Maps Layer */}
               <Image
                 key={googleMapUri}
@@ -441,9 +474,14 @@ export const AddressFormScreen: React.FC<AddressFormScreenProps> = ({
 
               {/* Top Map Badges */}
               <View style={styles.mapTopBar}>
-                <View style={[styles.mapBadge, { backgroundColor: 'rgba(0, 0, 0, 0.75)' }]}>
+                <View style={[styles.mapBadge, { backgroundColor: 'rgba(0, 0, 0, 0.78)' }]}>
                   <View style={[styles.statusDot, { backgroundColor: '#10B981' }]} />
-                  <Text style={styles.mapBadgeText}>DELIVERY LOCATION PIN</Text>
+                  <Text style={styles.mapBadgeText}>DELIVERY PIN • TAP TO INTERACT</Text>
+                </View>
+
+                <View style={[styles.mapBadge, { backgroundColor: 'rgba(37, 99, 235, 0.9)' }]}>
+                  <Ionicons name="expand" size={12} color="#FFFFFF" style={{ marginRight: 4 }} />
+                  <Text style={styles.mapBadgeText}>FULL MAP</Text>
                 </View>
               </View>
 
@@ -491,7 +529,7 @@ export const AddressFormScreen: React.FC<AddressFormScreenProps> = ({
                   <Ionicons name="navigate" size={18} color={colors.onPrimary} />
                 )}
               </TouchableOpacity>
-            </View>
+            </TouchableOpacity>
 
             {/* Address Details Under Map */}
             <View style={styles.mapAddressInfoBox}>
@@ -513,28 +551,56 @@ export const AddressFormScreen: React.FC<AddressFormScreenProps> = ({
                   </Text>
 
                   <Text style={[styles.locationSubtitle, { color: colors.textSecondary }]} numberOfLines={2}>
-                    {city ? `${city}, ${state} - ${pincode}` : 'Auto-fill address inputs from your current GPS'}
+                    {city ? `${city}, ${state} - ${pincode}` : 'Auto-fill address inputs from your current GPS or map pin'}
                   </Text>
                 </View>
               </View>
 
-              {/* Action Button: Auto Detect / Re-center Button */}
-              <TouchableOpacity
-                activeOpacity={0.85}
-                onPress={() => handleUseCurrentLocation(false)}
-                disabled={isLocating}
-                style={[
-                  styles.autoFillButton,
-                  {
-                    backgroundColor: colors.surfaceVariant,
-                    borderColor: colors.border,
-                  },
-                ]}
-              >
-                <Text style={[styles.autoFillButtonText, { color: colors.primary }]}>
-                  {isLocating ? 'Detecting Live GPS...' : 'Use Current Location to Auto-Fill'}
-                </Text>
-              </TouchableOpacity>
+              {/* Action Buttons: Auto Detect GPS & Pick on Interactive Map */}
+              <View style={styles.mapActionBtnRow}>
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  onPress={() => handleUseCurrentLocation(false)}
+                  disabled={isLocating}
+                  style={[
+                    styles.autoFillButton,
+                    {
+                      flex: 1,
+                      backgroundColor: colors.surfaceVariant,
+                      borderColor: colors.border,
+                      flexDirection: 'row',
+                      justifyContent: 'center',
+                      alignItems: 'center',
+                    },
+                  ]}
+                >
+                  <Ionicons name="navigate" size={14} color={colors.primary} style={{ marginRight: 6 }} />
+                  <Text style={[styles.autoFillButtonText, { color: colors.primary }]}>
+                    {isLocating ? 'Detecting...' : 'Current GPS'}
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  onPress={() => setShowInteractiveMapPicker(true)}
+                  style={[
+                    styles.autoFillButton,
+                    {
+                      flex: 1.25,
+                      backgroundColor: `${colors.primary}15`,
+                      borderColor: colors.primary,
+                      flexDirection: 'row',
+                      justifyContent: 'center',
+                      alignItems: 'center',
+                    },
+                  ]}
+                >
+                  <Ionicons name="map" size={15} color={colors.primary} style={{ marginRight: 6 }} />
+                  <Text style={[styles.autoFillButtonText, { color: colors.primary, fontWeight: '800' }]}>
+                    Pick on Map
+                  </Text>
+                </TouchableOpacity>
+              </View>
             </View>
           </View>
 
@@ -1037,6 +1103,15 @@ export const AddressFormScreen: React.FC<AddressFormScreenProps> = ({
             </Text>
           </TouchableOpacity>
         </View>
+
+        {/* 🗺️ In-App Interactive Google Map Location Picker Modal */}
+        <InteractiveMapPickerModal
+          visible={showInteractiveMapPicker}
+          initialLocation={coords}
+          initialAddressText={streetArea || location.locality || location.shortAddress}
+          onClose={() => setShowInteractiveMapPicker(false)}
+          onSelectLocation={handleInteractiveLocationSelect}
+        />
       </KeyboardAvoidingView>
     </View>
   );
@@ -1045,6 +1120,12 @@ export const AddressFormScreen: React.FC<AddressFormScreenProps> = ({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+  },
+  mapActionBtnRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 10,
   },
   scrollContent: {
     paddingHorizontal: 16,

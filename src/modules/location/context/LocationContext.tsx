@@ -79,13 +79,13 @@ export const LocationProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       Geolocation?.setRNConfiguration?.({
         skipPermissionRequests: false,
         authorizationLevel: 'whenInUse',
-        locationProvider: 'auto',
+        locationProvider: Platform.OS === 'android' ? 'playServices' : 'auto',
       });
     } catch (confErr) {
       console.warn('Geolocation config warning:', confErr);
     }
 
-    const getPosition = (highAccuracy: boolean, timeoutMs: number): Promise<any> => {
+    const getPosition = (highAccuracy: boolean, timeoutMs: number, maxAgeMs: number = 60000): Promise<any> => {
       return new Promise((resolve, reject) => {
         try {
           if (!Geolocation?.getCurrentPosition) {
@@ -95,7 +95,7 @@ export const LocationProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           Geolocation.getCurrentPosition(resolve, reject, {
             enableHighAccuracy: highAccuracy,
             timeout: timeoutMs,
-            maximumAge: 10000,
+            maximumAge: maxAgeMs,
           });
         } catch (callErr) {
           reject(callErr);
@@ -105,17 +105,24 @@ export const LocationProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     let position: any = null;
 
-    // 1. Try GPS satellite fix (5s)
+    // 1. Fast Fused / Cached device location (immediate, maxAge: 24h)
     try {
-      position = await getPosition(true, 5000);
-    } catch (gpsErr) {
-      console.log('High accuracy GPS notice, attempting network provider:', gpsErr);
-    }
+      position = await getPosition(false, 3000, 1000 * 60 * 60 * 24);
+    } catch (_) {}
 
-    // 2. If indoor / timeout, fallback to Network/Wi-Fi provider (works indoors in ~300ms)
+    // 2. High-accuracy active GPS satellite fix
     if (!position) {
       try {
-        position = await getPosition(false, 10000);
+        position = await getPosition(true, 8000, 30000);
+      } catch (gpsErr) {
+        console.log('High accuracy GPS notice, attempting network provider:', gpsErr);
+      }
+    }
+
+    // 3. If indoor / timeout, fallback to Network/Wi-Fi provider
+    if (!position) {
+      try {
+        position = await getPosition(false, 6000, 300000);
       } catch (netErr) {
         console.log('Network provider error:', netErr);
       }

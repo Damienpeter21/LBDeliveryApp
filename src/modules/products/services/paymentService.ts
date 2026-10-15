@@ -454,14 +454,14 @@ export class PaymentService {
     const orderRef = params.orderNumber || String(params.orderId);
 
     // Standard high-compatibility UPI link for all Indian payment apps (GPay, PhonePe, Paytm, BHIM)
-    const upiUri = `upi://pay?pa=razorpay@icici&pn=LB%20Fresh%20Delivery&am=${amountRupees}&cu=INR&tn=Order%20${encodeURIComponent(orderRef)}`;
-    const instantQrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(upiUri)}`;
+    const baseUpiUri = `upi://pay?pa=razorpay@icici&pn=LB%20Fresh%20Delivery&am=${amountRupees}&cu=INR&tn=Order%20${encodeURIComponent(orderRef)}`;
+    const instantQrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&margin=10&data=${encodeURIComponent(baseUpiUri)}`;
 
     if (!key || !secret) {
       return {
         qrId: `qr_${Date.now()}`,
         qrImageUrl: instantQrUrl,
-        upiUri,
+        upiUri: baseUpiUri,
       };
     }
 
@@ -491,11 +491,28 @@ export class PaymentService {
         },
       );
 
+      // When Razorpay successfully creates the dynamic single-use QR, construct the direct UPI URI
+      // and generate a crisp 1:1 square QR code. Razorpay's default image_url is a tall vertical
+      // standee poster (674x1644) which shrinks down into an unreadable tiny QR on mobile screens.
+      if (res?.data?.id) {
+        const qrId = res.data.id;
+        const rawId = qrId.replace(/^qr_/, '');
+        const merchant = encodeURIComponent(RAZORPAY_SETTINGS.merchantName || 'LB Mart');
+        const dynamicUpiUri = `upi://pay?ver=01&mode=22&pa=razorpay@icici&pn=${merchant}&tr=RZP${rawId}qrv2&cu=INR&mc=5411&am=${amountRupees}&tn=PaymentforOrder${encodeURIComponent(orderRef)}`;
+        const cleanSquareQrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&margin=10&data=${encodeURIComponent(dynamicUpiUri)}`;
+
+        return {
+          qrId,
+          qrImageUrl: cleanSquareQrUrl,
+          upiUri: dynamicUpiUri,
+        };
+      }
+
       if (res?.data?.image_url) {
         return {
           qrId: res.data.id || `qr_${Date.now()}`,
-          qrImageUrl: res.data.image_url,
-          upiUri: res.data.qr_code_url || upiUri,
+          qrImageUrl: instantQrUrl,
+          upiUri: res.data.qr_code_url || baseUpiUri,
         };
       }
     } catch (err: any) {
@@ -505,7 +522,7 @@ export class PaymentService {
     return {
       qrId: `qr_${Date.now()}`,
       qrImageUrl: instantQrUrl,
-      upiUri,
+      upiUri: baseUpiUri,
     };
   }
 

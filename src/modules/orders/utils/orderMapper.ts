@@ -331,16 +331,19 @@ export const mapDeliveryPickingToOrder = (
       raw.store_name ||
       raw.warehouse_name ||
       raw.hub_name ||
-      raw.location_name ||
-      (Array.isArray(raw.picking_type_id) ? raw.picking_type_id[1] : undefined) ||
-      raw.source_location_name ||
-      'LB Delivery Central Hub',
+      (Array.isArray(raw.warehouse_address_id) ? raw.warehouse_address_id[1] : undefined) ||
+      (Array.isArray(raw.company_id) ? raw.company_id[1] : undefined) ||
+      'LB Mart',
     storeAddress:
       raw.store_address ||
       raw.warehouse_address ||
       raw.hub_address ||
-      raw.source_location_address ||
-      'Mathigiri Main Road, Hosur',
+      '456 New Avenue, Therper Road, Denkanikottai, Tamil Nadu 600002',
+    storePhone:
+      raw.store_phone ||
+      raw.warehouse_phone ||
+      raw.hub_phone ||
+      '7603918199',
     deliveryOtp:
       raw.delivery_otp && raw.delivery_otp !== false
         ? String(raw.delivery_otp).trim()
@@ -351,18 +354,38 @@ export const mapDeliveryPickingToOrder = (
         : undefined,
     latitude: raw.latitude,
     longitude: raw.longitude,
-    customerLatitude: raw.customer_latitude || raw.latitude,
-    customerLongitude: raw.customer_longitude || raw.longitude,
+    customerLatitude:
+      (typeof raw.customer_latitude === 'number' && raw.customer_latitude !== 0 && raw.customer_latitude !== 12.5683)
+        ? raw.customer_latitude
+        : (typeof raw.partner_latitude === 'number' && raw.partner_latitude !== 0 && raw.partner_latitude !== 12.5683)
+        ? raw.partner_latitude
+        : (typeof raw.latitude === 'number' && raw.latitude !== 0 && raw.latitude !== 12.5683)
+        ? raw.latitude
+        : undefined,
+    customerLongitude:
+      (typeof raw.customer_longitude === 'number' && raw.customer_longitude !== 0 && raw.customer_longitude !== 77.8284)
+        ? raw.customer_longitude
+        : (typeof raw.partner_longitude === 'number' && raw.partner_longitude !== 0 && raw.partner_longitude !== 77.8284)
+        ? raw.partner_longitude
+        : (typeof raw.longitude === 'number' && raw.longitude !== 0 && raw.longitude !== 77.8284)
+        ? raw.longitude
+        : undefined,
     storeLatitude:
-      raw.store_latitude ||
-      raw.warehouse_latitude ||
-      raw.hub_latitude ||
-      raw.source_location_latitude,
+      (typeof raw.store_latitude === 'number' && raw.store_latitude !== 0 && raw.store_latitude !== 12.5683)
+        ? raw.store_latitude
+        : (typeof raw.warehouse_latitude === 'number' && raw.warehouse_latitude !== 0)
+        ? raw.warehouse_latitude
+        : (typeof raw.hub_latitude === 'number' && raw.hub_latitude !== 0)
+        ? raw.hub_latitude
+        : 12.519887,
     storeLongitude:
-      raw.store_longitude ||
-      raw.warehouse_longitude ||
-      raw.hub_longitude ||
-      raw.source_location_longitude,
+      (typeof raw.store_longitude === 'number' && raw.store_longitude !== 0 && raw.store_longitude !== 77.8284)
+        ? raw.store_longitude
+        : (typeof raw.warehouse_longitude === 'number' && raw.warehouse_longitude !== 0)
+        ? raw.warehouse_longitude
+        : (typeof raw.hub_longitude === 'number' && raw.hub_longitude !== 0)
+        ? raw.hub_longitude
+        : 77.792987,
   };
 };
 

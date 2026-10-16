@@ -352,8 +352,10 @@ export class OrderService {
             'partner_id',
             'delivery_otp',
             'sale_id',
-            'location_id',      // source warehouse/hub location — used to resolve store name
-            'picking_type_id',  // picking type label contains the warehouse/store name
+            'location_id',
+            'picking_type_id',
+            'warehouse_address_id',
+            'company_id',
           ],
         },
       );
@@ -427,18 +429,34 @@ export class OrderService {
             'res.partner',
             'read',
             [[Number(partnerId)]],
-            { fields: ['id', 'name', 'phone', 'street', 'city', 'zip'] },
+            { fields: ['id', 'name', 'phone', 'street', 'street2', 'city', 'zip', 'partner_latitude', 'partner_longitude'] },
           );
           customerPartner = Array.isArray(cpRes) ? cpRes[0] : (cpRes?.result ? cpRes.result[0] : null);
         } catch (_) {}
       }
 
+      // Resolve store/warehouse partner details from Odoo
+      let warehousePartner: any = null;
+      const storePartnerId = picking.warehouse_address_id
+        ? (Array.isArray(picking.warehouse_address_id) ? picking.warehouse_address_id[0] : picking.warehouse_address_id)
+        : picking.company_id
+        ? (Array.isArray(picking.company_id) ? picking.company_id[0] : picking.company_id)
+        : 1;
+
+      if (storePartnerId) {
+        try {
+          const wpRes: any = await callOdooRpc(
+            'res.partner',
+            'read',
+            [[Number(storePartnerId)]],
+            { fields: ['id', 'name', 'phone', 'street', 'street2', 'city', 'zip', 'partner_latitude', 'partner_longitude'] },
+          );
+          warehousePartner = Array.isArray(wpRes) ? wpRes[0] : (wpRes?.result ? wpRes.result[0] : null);
+        } catch (_) {}
+      }
+
       // Check live payment status if saleId exists.
-      // IMPORTANT: for COD orders, paymentStatus='paid' means cash was physically
-      // collected — it must NOT flip the payment badge to 'PAID (ONLINE)'.
-      // So we only update paymentStatus here for confirmed non-COD (online) orders.
       let paymentStatus = baseOrder?.paymentStatus || 'pending';
-      let isPaid = false;
 
       // Determine if this order is COD using client_order_ref (COD vs UPI) or baseOrder
       const soClientRef = typeof saleOrder?.client_order_ref === 'string' ? saleOrder.client_order_ref.toLowerCase() : '';
@@ -457,10 +475,6 @@ export class OrderService {
           const payRes = await DeliveryApiService.checkPaymentStatus(Number(saleId));
           const pData = payRes?.result !== undefined ? payRes.result : payRes;
           if (pData?.is_paid || pData?.payment_state === 'paid' || pData?.payment_status === 'paid') {
-            isPaid = true;
-            // Only mark paymentStatus as 'paid' for online orders.
-            // For COD orders the badge is driven by isCashCollected in the UI,
-            // not by paymentStatus, so we preserve 'pending' to avoid the wrong badge.
             if (resolvedIsCod === false) {
               paymentStatus = 'paid';
             }
@@ -497,6 +511,59 @@ export class OrderService {
         };
       });
 
+      // Resolved Store Information
+      const resolvedStoreName =
+        warehousePartner?.name ||
+        picking.store_name ||
+        baseOrder?.storeName ||
+        'LB Mart';
+
+      const resolvedStoreAddress =
+        [warehousePartner?.street, warehousePartner?.street2, warehousePartner?.city, warehousePartner?.zip]
+          .filter(Boolean)
+          .join(', ') ||
+        picking.store_address ||
+        baseOrder?.storeAddress ||
+        '456 New Avenue, Therper Road, Denkanikottai, Tamil Nadu 600002';
+
+      const resolvedStorePhone =
+        warehousePartner?.phone ||
+        picking.store_phone ||
+        baseOrder?.storePhone ||
+        '7603918199';
+
+      const resolvedStoreLat =
+        (typeof warehousePartner?.partner_latitude === 'number' && warehousePartner.partner_latitude !== 0)
+          ? warehousePartner.partner_latitude
+          : (typeof picking.store_latitude === 'number' && picking.store_latitude !== 0)
+          ? picking.store_latitude
+          : (typeof baseOrder?.storeLatitude === 'number' && baseOrder.storeLatitude !== 0)
+          ? baseOrder.storeLatitude
+          : 12.519887;
+
+      const resolvedStoreLon =
+        (typeof warehousePartner?.partner_longitude === 'number' && warehousePartner.partner_longitude !== 0)
+          ? warehousePartner.partner_longitude
+          : (typeof picking.store_longitude === 'number' && picking.store_longitude !== 0)
+          ? picking.store_longitude
+          : (typeof baseOrder?.storeLongitude === 'number' && baseOrder.storeLongitude !== 0)
+          ? baseOrder.storeLongitude
+          : 77.792987;
+
+      const customerLat =
+        (typeof customerPartner?.partner_latitude === 'number' && customerPartner.partner_latitude !== 0)
+          ? customerPartner.partner_latitude
+          : (typeof picking.customer_latitude === 'number' && picking.customer_latitude !== 0)
+          ? picking.customer_latitude
+          : baseOrder?.customerLatitude;
+
+      const customerLon =
+        (typeof customerPartner?.partner_longitude === 'number' && customerPartner.partner_longitude !== 0)
+          ? customerPartner.partner_longitude
+          : (typeof picking.customer_longitude === 'number' && picking.customer_longitude !== 0)
+          ? picking.customer_longitude
+          : baseOrder?.customerLongitude;
+
       const mappedOrder = mapDeliveryPickingToOrder({
         ...baseOrder,
         ...picking,
@@ -509,15 +576,16 @@ export class OrderService {
           baseOrder?.customerName,
         customer_phone: customerPartner?.phone || baseOrder?.customerPhone,
         customer_address:
-          [customerPartner?.street, customerPartner?.city, customerPartner?.zip]
+          [customerPartner?.street, customerPartner?.street2, customerPartner?.city, customerPartner?.zip]
             .filter(Boolean)
             .join(', ') || baseOrder?.deliveryAddress,
-        // Carry forward store location fields from baseOrder so they are not lost
-        // when the stock.picking read doesn't return custom LB store fields
-        store_name: picking.store_name || baseOrder?.storeName,
-        store_address: picking.store_address || baseOrder?.storeAddress,
-        store_latitude: picking.store_latitude ?? baseOrder?.storeLatitude,
-        store_longitude: picking.store_longitude ?? baseOrder?.storeLongitude,
+        store_name: resolvedStoreName,
+        store_address: resolvedStoreAddress,
+        store_phone: resolvedStorePhone,
+        store_latitude: resolvedStoreLat,
+        store_longitude: resolvedStoreLon,
+        customer_latitude: customerLat,
+        customer_longitude: customerLon,
       });
 
       return {
@@ -527,15 +595,14 @@ export class OrderService {
         items: items.length > 0 ? items : (baseOrder?.items || mappedOrder.items),
         itemCount: items.length > 0 ? items.length : (baseOrder?.itemCount || mappedOrder.itemCount),
         paymentStatus,
-        // Preserve the original isCod flag — use resolvedIsCod (from sale.order) when
-        // available, otherwise fall back to baseOrder then mappedOrder.
-        // This ensures COD orders remain COD even after cash reconciliation is recorded.
         isCod: resolvedIsCod !== undefined ? resolvedIsCod : (baseOrder?.isCod ?? mappedOrder.isCod),
-        // Preserve store location from baseOrder so Navigate button always works
-        storeName: mappedOrder.storeName || baseOrder?.storeName,
-        storeAddress: mappedOrder.storeAddress || baseOrder?.storeAddress,
-        storeLatitude: mappedOrder.storeLatitude ?? baseOrder?.storeLatitude,
-        storeLongitude: mappedOrder.storeLongitude ?? baseOrder?.storeLongitude,
+        storeName: resolvedStoreName,
+        storeAddress: resolvedStoreAddress,
+        storePhone: resolvedStorePhone,
+        storeLatitude: resolvedStoreLat,
+        storeLongitude: resolvedStoreLon,
+        customerLatitude: customerLat ?? mappedOrder.customerLatitude,
+        customerLongitude: customerLon ?? mappedOrder.customerLongitude,
         deliveryOtp:
           (picking?.delivery_otp && picking.delivery_otp !== false
             ? String(picking.delivery_otp).trim()

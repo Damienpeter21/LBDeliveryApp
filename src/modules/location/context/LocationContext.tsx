@@ -79,7 +79,7 @@ export const LocationProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       Geolocation?.setRNConfiguration?.({
         skipPermissionRequests: false,
         authorizationLevel: 'whenInUse',
-        locationProvider: Platform.OS === 'android' ? 'playServices' : 'auto',
+        locationProvider: Platform.OS === 'android' ? 'android' : 'auto',
       });
     } catch (confErr) {
       console.warn('Geolocation config warning:', confErr);

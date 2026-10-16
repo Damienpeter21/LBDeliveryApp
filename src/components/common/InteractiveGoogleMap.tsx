@@ -54,6 +54,7 @@ export interface RouteDetail {
 
 export interface InteractiveGoogleMapProps {
   mode?: 'roadmap' | 'picker';
+  defaultMapType?: 'roadmap' | 'satellite' | 'hybrid' | 'terrain';
   origin?: MapCoordinates;
   destination?: MapCoordinates;
   targetType?: 'store' | 'customer';
@@ -81,6 +82,7 @@ export const InteractiveGoogleMap = React.forwardRef<
   (
     {
       mode = 'roadmap',
+      defaultMapType = 'roadmap',
       origin,
       destination,
       targetType = 'store',
@@ -104,7 +106,20 @@ export const InteractiveGoogleMap = React.forwardRef<
     const [isMapReady, setIsMapReady] = useState(false);
     const [webViewError, setWebViewError] = useState(false);
     const [trafficEnabled, setTrafficEnabled] = useState(false);
-    const [currentMapType, setCurrentMapType] = useState<'roadmap' | 'satellite'>('roadmap');
+    const [currentMapType, setCurrentMapType] = useState<'roadmap' | 'satellite' | 'hybrid'>(
+      defaultMapType === 'satellite' ? 'hybrid' : (defaultMapType as any),
+    );
+
+    useEffect(() => {
+      const resolved = defaultMapType === 'satellite' ? 'hybrid' : defaultMapType;
+      setCurrentMapType(resolved as any);
+      if (isMapReady) {
+        webViewRef.current?.injectJavaScript(`
+          if (window.setMapType) { window.setMapType('${resolved}'); }
+          true;
+        `);
+      }
+    }, [defaultMapType, isMapReady]);
 
     // Safe coordinates resolution directly from props (no hardcoded coordinates)
     const safeOrigin = useMemo(() => {
@@ -156,9 +171,10 @@ export const InteractiveGoogleMap = React.forwardRef<
         `);
       },
       setMapType: (type: 'roadmap' | 'satellite' | 'hybrid' | 'terrain') => {
-        setCurrentMapType(type === 'satellite' || type === 'hybrid' ? 'satellite' : 'roadmap');
+        const resolved = type === 'satellite' || type === 'hybrid' ? 'hybrid' : 'roadmap';
+        setCurrentMapType(resolved as any);
         webViewRef.current?.injectJavaScript(`
-          if (window.setMapType) { window.setMapType('${type}'); }
+          if (window.setMapType) { window.setMapType('${resolved}'); }
           true;
         `);
       },
@@ -202,9 +218,15 @@ export const InteractiveGoogleMap = React.forwardRef<
 <html>
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=10.0, user-scalable=yes" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, shrink-to-fit=no" />
   <style>
-    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    * {
+      box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+      user-select: none;
+    }
     html, body {
       margin: 0;
       padding: 0;
@@ -213,7 +235,7 @@ export const InteractiveGoogleMap = React.forwardRef<
       overflow: hidden;
       background: ${isDark ? '#0f172a' : '#f8fafc'};
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      touch-action: pan-x pan-y pinch-zoom;
+      touch-action: none;
     }
     #map {
       width: 100%;
@@ -221,6 +243,7 @@ export const InteractiveGoogleMap = React.forwardRef<
       position: absolute;
       top: 0;
       left: 0;
+      touch-action: none;
     }
     .custom-driver-pin {
       position: relative;
@@ -325,16 +348,19 @@ export const InteractiveGoogleMap = React.forwardRef<
           ? (originCoords || destCoords || { lat: 0, lng: 0 })
           : (destCoords || originCoords || { lat: 0, lng: 0 });
         var mapOptions = {
-          zoom: ${initialZoom},
+          zoom: ${initialZoom || 15},
           center: mapCenterCoords,
+          mapTypeId: '${defaultMapType === 'satellite' || defaultMapType === 'hybrid' ? 'hybrid' : 'roadmap'}',
           disableDefaultUI: true,
           zoomControl: false,
           mapTypeControl: false,
           scaleControl: false,
           streetViewControl: false,
-          rotateControl: false,
+          rotateControl: true,
           fullscreenControl: false,
           gestureHandling: '${interactive ? 'greedy' : 'none'}',
+          isFractionalZoomEnabled: true,
+          clickableIcons: false,
           styles: ${
             isDark
               ? JSON.stringify([
@@ -610,7 +636,10 @@ export const InteractiveGoogleMap = React.forwardRef<
 
     window.setMapType = function(type) {
       if (map) {
-        map.setMapTypeId(type);
+        var resolvedType = (type === 'satellite' || type === 'hybrid')
+          ? google.maps.MapTypeId.HYBRID
+          : google.maps.MapTypeId.ROADMAP;
+        map.setMapTypeId(resolvedType);
       }
     };
 
@@ -651,6 +680,34 @@ export const InteractiveGoogleMap = React.forwardRef<
       }
     };
 
+    window.updateDestination = function(lat, lng, title) {
+      if (typeof lat !== 'number' || typeof lng !== 'number' || isNaN(lat) || isNaN(lng) || lat === 0 || lng === 0) return;
+      destCoords = { lat: lat, lng: lng };
+      if (destMarker) {
+        destMarker.setPosition(destCoords);
+        if (title) destMarker.setTitle(title);
+      } else if (map) {
+        destMarker = new google.maps.Marker({
+          position: destCoords,
+          map: map,
+          icon: destIconSvg,
+          title: title || '${destLabel}',
+          zIndex: 101,
+        });
+      }
+      if (originCoords && directionsService && isRoadmap) {
+        calculateRoute();
+      } else if (map) {
+        map.panTo(destCoords);
+      }
+    };
+
+    window.setMapZoom = function(zoom) {
+      if (map && typeof zoom === 'number' && !isNaN(zoom)) {
+        map.setZoom(zoom);
+      }
+    };
+
     window.zoomIn = function() {
       if (map) map.setZoom((map.getZoom() || 15) + 1);
     };
@@ -665,10 +722,7 @@ export const InteractiveGoogleMap = React.forwardRef<
 </html>`;
     }, [
       mode,
-      safeOrigin,
-      safeDest,
       targetType,
-      initialZoom,
       interactive,
       apiKey,
       isDark,
@@ -710,6 +764,18 @@ export const InteractiveGoogleMap = React.forwardRef<
       }
     }, [isMapReady, safeOrigin?.latitude, safeOrigin?.longitude]);
 
+    // Seamlessly update destination & re-calculate route in WebView when safeDest changes
+    useEffect(() => {
+      if (isMapReady && safeDest?.latitude && safeDest?.longitude) {
+        webViewRef.current?.injectJavaScript(`
+          if (window.updateDestination) {
+            window.updateDestination(${safeDest.latitude}, ${safeDest.longitude}, ${JSON.stringify(safeDest.title || '')});
+          }
+          true;
+        `);
+      }
+    }, [isMapReady, safeDest?.latitude, safeDest?.longitude, safeDest?.title]);
+
     // Dynamic fallback Static Map if WebView is unavailable or encounters error
     const [fallbackZoom, setFallbackZoom] = useState(initialZoom);
     const [fallbackPan] = useState(new Animated.ValueXY({ x: 0, y: 0 }));
@@ -737,6 +803,8 @@ export const InteractiveGoogleMap = React.forwardRef<
     const staticMapFallbackUrl = useMemo(() => {
       const destColor = targetType === 'store' ? 'green' : 'red';
       const destLabel = targetType === 'store' ? 'S' : 'C';
+      const mapTypeParam =
+        currentMapType === 'hybrid' || currentMapType === 'satellite' ? 'hybrid' : 'roadmap';
 
       if (mode === 'roadmap') {
         const polylineParam = routePolyline
@@ -752,11 +820,11 @@ export const InteractiveGoogleMap = React.forwardRef<
         if (!safeDest && !safeOrigin) return '';
 
         // OMIT center and zoom so Google Static Maps automatically frames all markers and the entire road route
-        return `https://maps.googleapis.com/maps/api/staticmap?size=640x960&scale=2&maptype=roadmap&format=png&visual_refresh=true${originMarkerParam}${destMarkerParam}${polylineParam}&key=${apiKey}`;
+        return `https://maps.googleapis.com/maps/api/staticmap?size=640x960&scale=2&maptype=${mapTypeParam}&format=png&visual_refresh=true${originMarkerParam}${destMarkerParam}${polylineParam}&key=${apiKey}`;
       }
       if (!safeDest) return '';
-      return `https://maps.googleapis.com/maps/api/staticmap?center=${safeDest.latitude},${safeDest.longitude}&zoom=${fallbackZoom}&size=640x960&scale=2&maptype=roadmap&format=png&visual_refresh=true&markers=color:red%7C${safeDest.latitude},${safeDest.longitude}&key=${apiKey}`;
-    }, [mode, targetType, safeOrigin, safeDest, routePolyline, fallbackZoom, apiKey]);
+      return `https://maps.googleapis.com/maps/api/staticmap?center=${safeDest.latitude},${safeDest.longitude}&zoom=${fallbackZoom}&size=640x960&scale=2&maptype=${mapTypeParam}&format=png&visual_refresh=true&markers=color:red%7C${safeDest.latitude},${safeDest.longitude}&key=${apiKey}`;
+    }, [mode, targetType, currentMapType, safeOrigin, safeDest, routePolyline, fallbackZoom, apiKey]);
 
     const handleFallbackZoomIn = () => {
       setFallbackZoom(prev => Math.min(prev + 1, 19));
@@ -776,7 +844,7 @@ export const InteractiveGoogleMap = React.forwardRef<
     };
 
     const handleToggleMapType = () => {
-      const nextType = currentMapType === 'roadmap' ? 'satellite' : 'roadmap';
+      const nextType = currentMapType === 'roadmap' ? 'hybrid' : 'roadmap';
       setCurrentMapType(nextType);
       webViewRef.current?.injectJavaScript(`
         if (window.setMapType) { window.setMapType('${nextType}'); }
@@ -817,7 +885,7 @@ export const InteractiveGoogleMap = React.forwardRef<
         <WebViewComponent
           ref={webViewRef}
           originWhitelist={['*']}
-          source={{ html: mapHtml }}
+          source={{ html: mapHtml, baseUrl: 'https://maps.googleapis.com' }}
           style={styles.webView}
           javaScriptEnabled
           domStorageEnabled
@@ -825,9 +893,18 @@ export const InteractiveGoogleMap = React.forwardRef<
           scrollEnabled={false}
           bounces={false}
           overScrollMode="never"
+          androidHardwareAccelerationDisabled={false}
+          setSupportMultipleWindows={false}
           onMessage={handleMessage}
-          onError={() => setWebViewError(true)}
-          onHttpError={() => setWebViewError(true)}
+          onError={(e: any) => {
+            console.warn('In-App Google Map WebView Error:', e.nativeEvent);
+            if (!isMapReady) {
+              setWebViewError(true);
+            }
+          }}
+          onHttpError={(e: any) => {
+            console.warn('In-App Google Map HTTP warning:', e.nativeEvent?.statusCode, e.nativeEvent?.url);
+          }}
           startInLoadingState={false}
         />
       );
@@ -883,7 +960,10 @@ export const InteractiveGoogleMap = React.forwardRef<
                 style={[
                   styles.controlButton,
                   {
-                    backgroundColor: currentMapType === 'satellite' ? '#2563EB' : colors.card,
+                    backgroundColor:
+                      currentMapType === 'satellite' || currentMapType === 'hybrid'
+                        ? '#2563EB'
+                        : colors.card,
                     borderColor: colors.border,
                   },
                 ]}
@@ -891,9 +971,13 @@ export const InteractiveGoogleMap = React.forwardRef<
                 activeOpacity={0.8}
               >
                 <Ionicons
-                  name="layers-outline"
+                  name={currentMapType === 'satellite' || currentMapType === 'hybrid' ? 'earth' : 'layers-outline'}
                   size={19}
-                  color={currentMapType === 'satellite' ? '#FFFFFF' : colors.textPrimary}
+                  color={
+                    currentMapType === 'satellite' || currentMapType === 'hybrid'
+                      ? '#FFFFFF'
+                      : colors.textPrimary
+                  }
                 />
               </TouchableOpacity>
             )}
@@ -958,11 +1042,14 @@ InteractiveGoogleMap.displayName = 'InteractiveGoogleMap';
 const styles = StyleSheet.create({
   container: {
     width: '100%',
+    flex: 1,
     overflow: 'hidden',
     position: 'relative',
   },
   webView: {
     flex: 1,
+    width: '100%',
+    height: '100%',
     backgroundColor: 'transparent',
   },
   loadingOverlay: {

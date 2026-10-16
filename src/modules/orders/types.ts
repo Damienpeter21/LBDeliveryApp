@@ -55,6 +55,7 @@ export interface Order {
   customerPhone?: string;
   storeName?: string;
   storeAddress?: string;
+  storePhone?: string;
   eta?: string;
   deliveryPartner?: DeliveryPartner;
   deliveryFee?: number;

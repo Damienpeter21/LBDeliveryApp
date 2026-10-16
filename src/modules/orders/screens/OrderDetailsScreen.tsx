@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -134,24 +134,32 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
   // Google Maps coordinates & dynamic static map URLs
   const googleMapKey = (API_SETTINGS.googleMap?.key || 'AIzaSyDfNOU_zv2QAESamCNM8UM8M1FyAXXORZc').trim();
   const customerLat =
-    currentOrder.customerLatitude && currentOrder.customerLatitude !== 12.5683
+    currentOrder.customerLatitude &&
+    currentOrder.customerLatitude !== 0 &&
+    currentOrder.customerLatitude !== 12.5683
       ? currentOrder.customerLatitude
-      : 12.7315;
+      : 12.519887;
   const customerLon =
-    currentOrder.customerLongitude && currentOrder.customerLongitude !== 77.8284
+    currentOrder.customerLongitude &&
+    currentOrder.customerLongitude !== 0 &&
+    currentOrder.customerLongitude !== 77.8284
       ? currentOrder.customerLongitude
-      : 77.8314;
+      : 77.792987;
   const customerStaticMapUrl = `https://maps.googleapis.com/maps/api/staticmap?center=${customerLat},${customerLon}&zoom=15&size=640x640&scale=2&maptype=roadmap&markers=color:red%7Clabel:C%7C${customerLat},${customerLon}&key=${googleMapKey}`;
 
-  // Store Hub (Mathigiri Main Road, Hosur: 12.6979, 77.8096)
+  // Store Hub (LB Mart, 456 New Avenue, Therper Road, Denkanikottai: 12.519887, 77.792987)
   const storeLat =
-    currentOrder.storeLatitude && currentOrder.storeLatitude !== 12.5683
+    currentOrder.storeLatitude &&
+    currentOrder.storeLatitude !== 0 &&
+    currentOrder.storeLatitude !== 12.5683
       ? currentOrder.storeLatitude
-      : 12.6979;
+      : 12.519887;
   const storeLon =
-    currentOrder.storeLongitude && currentOrder.storeLongitude !== 77.8284
+    currentOrder.storeLongitude &&
+    currentOrder.storeLongitude !== 0 &&
+    currentOrder.storeLongitude !== 77.8284
       ? currentOrder.storeLongitude
-      : 77.8096;
+      : 77.792987;
   const storeStaticMapUrl = `https://maps.googleapis.com/maps/api/staticmap?center=${storeLat},${storeLon}&zoom=15&size=640x640&scale=2&maptype=roadmap&markers=color:green%7Clabel:S%7C${storeLat},${storeLon}&key=${googleMapKey}`;
 
   // Delivery stage tracking:
@@ -181,8 +189,17 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
     longitude: storeLon,
   });
   const [mapZoom, setMapZoom] = useState<number>(14);
+  const [mapType, setMapType] = useState<'roadmap' | 'hybrid'>('roadmap');
   const interactiveMapRef = useRef<InteractiveGoogleMapRef>(null);
   const [showRouteStepsSheet, setShowRouteStepsSheet] = useState<boolean>(false);
+
+  const handleToggleMapType = useCallback(() => {
+    setMapType(prev => {
+      const next = prev === 'roadmap' ? 'hybrid' : 'roadmap';
+      interactiveMapRef.current?.setMapType(next);
+      return next;
+    });
+  }, []);
 
   // Pre-load dynamic Razorpay UPI QR code for this order
   const loadRazorpayQr = async (orderAmount?: number) => {
@@ -441,7 +458,7 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
       Geolocation?.setRNConfiguration?.({
         skipPermissionRequests: false,
         authorizationLevel: 'whenInUse',
-        locationProvider: Platform.OS === 'android' ? 'playServices' : 'auto',
+        locationProvider: Platform.OS === 'android' ? 'android' : 'auto',
       });
     } catch (confErr) {
       console.warn('Geolocation config warning:', confErr);
@@ -469,32 +486,24 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
         }
       };
 
-      // 1. Fast Fused / Cached device location (maximumAge: 24 hours, timeout: 3000ms, enableHighAccuracy: false)
-      // When Play Services is active, getLastLocation() returns the exact physical device coordinate from memory immediately.
-      Geolocation.getCurrentPosition(
-        onGotPos,
-        () => {
-          // 2. High-accuracy active GPS/network fix (timeout: 10000ms, enableHighAccuracy: true)
-          Geolocation.getCurrentPosition(
-            onGotPos,
-            () => {
-              // 3. Balanced network provider (timeout: 6000ms, enableHighAccuracy: false)
-              Geolocation.getCurrentPosition(
-                onGotPos,
-                () => {
-                  if (!resolved) {
-                    resolved = true;
-                    resolve(null);
-                  }
-                },
-                { enableHighAccuracy: false, timeout: 6000, maximumAge: 300000 },
-              );
-            },
-            { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 },
-          );
-        },
-        { enableHighAccuracy: false, timeout: 3000, maximumAge: 1000 * 60 * 60 * 24 },
-      );
+      try {
+        Geolocation.getCurrentPosition(
+          onGotPos,
+          err => {
+            console.log('Native geolocation notice:', err?.message || err);
+            if (!resolved) {
+              resolved = true;
+              resolve(null);
+            }
+          },
+          { enableHighAccuracy: false, timeout: 5000, maximumAge: 60000 },
+        );
+      } catch (_e) {
+        if (!resolved) {
+          resolved = true;
+          resolve(null);
+        }
+      }
 
       // Safety timeout
       setTimeout(() => {
@@ -502,7 +511,7 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
           resolved = true;
           resolve(null);
         }
-      }, 12000);
+      }, 6000);
     });
 
     let finalCoords = nativeCoords;
@@ -536,7 +545,7 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
       Geolocation?.setRNConfiguration?.({
         skipPermissionRequests: false,
         authorizationLevel: 'whenInUse',
-        locationProvider: Platform.OS === 'android' ? 'playServices' : 'auto',
+        locationProvider: Platform.OS === 'android' ? 'android' : 'auto',
       });
       watchId = Geolocation.watchPosition(
         pos => {
@@ -806,16 +815,28 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
     fallbackAddress?: string,
   ) => {
     // Open full-screen road map modal with interactive pan and zoom
-    const target = isStorePickupPhase ? 'store' : 'customer';
+    const isStoreClick =
+      label?.toLowerCase().includes('store') || label?.toLowerCase().includes('hub');
+    const isCustomerClick =
+      label?.toLowerCase().includes('customer') || label?.toLowerCase().includes('doorstep');
+    const target = isStoreClick
+      ? 'store'
+      : isCustomerClick
+      ? 'customer'
+      : isStorePickupPhase
+      ? 'store'
+      : 'customer';
+
     setInAppMapTarget(target);
-    // Center directly on driver's live GPS / device location or target
-    const centerLoc =
-      deviceLocation ||
-      (target === 'store'
+    const destLoc =
+      typeof latitude === 'number' && typeof longitude === 'number' && latitude !== 0 && longitude !== 0
+        ? { latitude, longitude }
+        : target === 'store'
         ? { latitude: storeLat, longitude: storeLon }
-        : { latitude: customerLat, longitude: customerLon });
+        : { latitude: customerLat, longitude: customerLon };
+    const centerLoc = destLoc || deviceLocation;
     setMapCenter(centerLoc);
-    setMapZoom(14);
+    setMapZoom(15);
     resetMapTransform();
     setShowInAppMapModal(true);
     fetchLiveRoute(target);
@@ -1367,10 +1388,10 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
       <View style={styles.storeDetailRow}>
         <View style={{ flex: 1, marginRight: 10 }}>
           <Text style={[styles.storeName, { color: colors.textPrimary }]}>
-            {currentOrder.storeName || 'LB Delivery Central Hub'}
+            {currentOrder.storeName || 'LB Mart'}
           </Text>
           <Text style={[styles.storeAddress, { color: colors.textSecondary }]}>
-            {currentOrder.storeAddress || 'Mathigiri Main Road, Hosur'}
+            {currentOrder.storeAddress || '456 New Avenue, Therper Road, Denkanikottai, Tamil Nadu 600002'}
           </Text>
         </View>
       </View>
@@ -1395,7 +1416,7 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
       <View style={styles.cardActionRow}>
         <TouchableOpacity
           style={[styles.cardActionBtnSecondary, { backgroundColor: colors.surfaceVariant, borderColor: colors.border }]}
-          onPress={() => Linking.openURL('tel:+919843012345').catch(() => {})}
+          onPress={() => Linking.openURL(`tel:${currentOrder.storePhone || '7603918199'}`).catch(() => {})}
           activeOpacity={0.7}
         >
           <Ionicons name="call" size={16} color={colors.primary} style={{ marginRight: 6 }} />
@@ -2599,6 +2620,7 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
           <InteractiveGoogleMap
             ref={interactiveMapRef}
             mode="roadmap"
+            defaultMapType={mapType}
             origin={
               deviceLocation
                 ? {
@@ -2671,7 +2693,16 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
               <Ionicons name="arrow-back" size={20} color={colors.textPrimary} />
             </TouchableOpacity>
 
-            <View style={{ flex: 1, marginHorizontal: 12 }}>
+            <TouchableOpacity
+              style={{ flex: 1, marginHorizontal: 12 }}
+              onPress={() => {
+                const nextTarget = inAppMapTarget === 'store' ? 'customer' : 'store';
+                setInAppMapTarget(nextTarget);
+                fetchLiveRoute(nextTarget);
+                interactiveMapRef.current?.recenter();
+              }}
+              activeOpacity={0.7}
+            >
               <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                 {/* Two-Wheeler Vehicle Icon for Device */}
                 <View style={[styles.headerMiniBadge, { backgroundColor: '#DBEAFE' }]}>
@@ -2694,11 +2725,32 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
                 <Text style={[styles.topRouteOriginText, { color: colors.textPrimary, marginLeft: 6 }]} numberOfLines={1}>
                   {inAppMapTarget === 'store' ? 'Route to Store Hub' : 'Route to Customer'}
                 </Text>
+                <Ionicons name="swap-horizontal" size={13} color={colors.primary} style={{ marginLeft: 6 }} />
               </View>
               <Text style={[styles.topRouteGpsSub, { color: colors.textSecondary }]}>
-                Live Two-Wheeler GPS • Drag to pan • Pinch to zoom
+                Tap to switch • Live GPS • Pinch to zoom
               </Text>
-            </View>
+            </TouchableOpacity>
+
+            {/* Satellite / Hybrid View Toggle Button */}
+            <TouchableOpacity
+              style={[
+                styles.topRouteRefreshBtn,
+                {
+                  backgroundColor: mapType === 'hybrid' ? '#2563EB' : colors.surfaceVariant,
+                  marginRight: 8,
+                },
+              ]}
+              onPress={handleToggleMapType}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              activeOpacity={0.7}
+            >
+              <Ionicons
+                name={mapType === 'hybrid' ? 'earth' : 'layers-outline'}
+                size={18}
+                color={mapType === 'hybrid' ? '#FFFFFF' : colors.textPrimary}
+              />
+            </TouchableOpacity>
 
             <TouchableOpacity
               style={[styles.topRouteRefreshBtn, { backgroundColor: colors.surfaceVariant }]}
@@ -2802,7 +2854,7 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
             </View>
           )}
 
-          {/* Floating Zoom In (+) / Zoom Out (-) Controls */}
+          {/* Floating Map Controls: Satellite Toggle, Recenter, Zoom In (+), Zoom Out (-) */}
           <View
             style={[
               styles.floatingMapControls,
@@ -2813,25 +2865,53 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
               },
             ]}
           >
+            {/* Map Type: Satellite / Hybrid Toggle */}
+            <TouchableOpacity
+              style={styles.mapControlBtn}
+              onPress={handleToggleMapType}
+              activeOpacity={0.7}
+              hitSlop={{ top: 8, bottom: 4, left: 8, right: 8 }}
+            >
+              <Ionicons
+                name={mapType === 'hybrid' ? 'earth' : 'layers-outline'}
+                size={19}
+                color={mapType === 'hybrid' ? '#2563EB' : colors.textPrimary}
+              />
+            </TouchableOpacity>
+
+            <View style={[styles.mapControlDivider, { backgroundColor: colors.border }]} />
+
+            {/* Recenter */}
+            <TouchableOpacity
+              style={styles.mapControlBtn}
+              onPress={() => interactiveMapRef.current?.recenter?.()}
+              activeOpacity={0.7}
+              hitSlop={{ top: 4, bottom: 4, left: 8, right: 8 }}
+            >
+              <Ionicons name="locate" size={19} color="#2563EB" />
+            </TouchableOpacity>
+
+            <View style={[styles.mapControlDivider, { backgroundColor: colors.border }]} />
+
+            {/* Zoom In (+) */}
             <TouchableOpacity
               style={styles.mapControlBtn}
               onPress={() => {
                 interactiveMapRef.current?.zoomIn?.();
-                setMapZoom(prev => Math.min((prev || 15) + 1, 20));
               }}
               activeOpacity={0.7}
-              hitSlop={{ top: 8, bottom: 4, left: 8, right: 8 }}
+              hitSlop={{ top: 4, bottom: 4, left: 8, right: 8 }}
             >
               <Ionicons name="add" size={20} color={colors.textPrimary} />
             </TouchableOpacity>
 
             <View style={[styles.mapControlDivider, { backgroundColor: colors.border }]} />
 
+            {/* Zoom Out (-) */}
             <TouchableOpacity
               style={styles.mapControlBtn}
               onPress={() => {
                 interactiveMapRef.current?.zoomOut?.();
-                setMapZoom(prev => Math.max((prev || 15) - 1, 5));
               }}
               activeOpacity={0.7}
               hitSlop={{ top: 4, bottom: 8, left: 8, right: 8 }}
@@ -2869,7 +2949,7 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
                 <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
                   <Text style={[styles.bottomDockDestTitle, { color: colors.textPrimary }]} numberOfLines={1}>
                     {inAppMapTarget === 'store'
-                      ? currentOrder.storeName || 'LB Delivery Central Hub'
+                      ? currentOrder.storeName || 'LB Mart'
                       : currentOrder.customerName || 'Customer Doorstep'}
                   </Text>
                   {!!directionsRoute?.distance && (
@@ -2882,7 +2962,7 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
                 </View>
                 <Text style={[styles.bottomDockDestAddress, { color: colors.textSecondary }]} numberOfLines={1}>
                   {inAppMapTarget === 'store'
-                    ? currentOrder.storeAddress || 'Mathigiri Main Road, Hosur'
+                    ? currentOrder.storeAddress || '456 New Avenue, Therper Road, Denkanikottai'
                     : currentOrder.deliveryAddress}
                 </Text>
               </View>
@@ -2945,7 +3025,8 @@ export const OrderDetailsScreen: React.FC<OrderDetailsScreenProps> = ({
                 ]}
                 onPress={() => {
                   if (inAppMapTarget === 'store') {
-                    Linking.openURL('tel:+919843012345').catch(() => {});
+                    const phone = currentOrder.storePhone || '7603918199';
+                    Linking.openURL(`tel:${phone}`).catch(() => {});
                   } else {
                     handleCallCustomer();
                   }
